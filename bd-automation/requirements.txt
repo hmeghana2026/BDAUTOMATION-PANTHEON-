@@ -1,0 +1,34 @@
+# LLM
+groq==0.9.0
+google-generativeai==0.7.2
+
+# Database
+supabase==2.5.3
+pydantic==2.7.1
+
+# Web scraping
+firecrawl-py==0.0.16
+beautifulsoup4==4.12.3
+requests==2.31.0
+lxml==5.2.1
+
+# Email
+resend==2.3.0
+
+# Task queue
+celery==5.4.0
+redis==5.0.4
+kombu==5.3.7
+
+# Dashboard
+streamlit==1.35.0
+pandas==2.2.2
+
+# Environment
+python-dotenv==1.0.1
+
+# Transcription (optional — install separately if needed)
+# openai-whisper==20231117
+
+# HTTP
+httpx==0.27.0

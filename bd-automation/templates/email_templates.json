@@ -1,0 +1,14 @@
+{
+  "restaurant": {
+    "subject": "Quick question about {company_name}'s delivery",
+    "prompt_template": "Write a personalized cold email for a restaurant owner about SMS marketing for repeat orders and delivery. Reference: {insights}. Highlight how local restaurants see 30% more repeat visits with SMS loyalty programs."
+  },
+  "vet": {
+    "subject": "Appointment no-shows at {company_name}?",
+    "prompt_template": "Write a personalized cold email for a vet clinic owner about automated SMS appointment reminders to reduce no-shows. Reference: {insights}. Mention that clinics typically reduce no-shows by 40% with automated reminders."
+  },
+  "dermatologist": {
+    "subject": "Patient engagement at {company_name}",
+    "prompt_template": "Write a personalized cold email for a dermatologist about patient retention tools and automated follow-up care reminders. Reference: {insights}. Focus on how skin care practices increase patient LTV with post-treatment check-in sequences."
+  }
+}
