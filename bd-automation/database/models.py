@@ -1,4 +1,4 @@
-from pydantic import BaseModel, EmailStr, field_validator
+from pydantic import BaseModel, field_validator
 from typing import Optional, Literal
 from datetime import datetime
 import uuid
@@ -113,4 +113,45 @@ class LeadScore(BaseModel):
     contact_quality_score: int = 0
     research_quality_score: int = 0
     last_calculated: Optional[datetime] = None
+    created_at: Optional[datetime] = None
+
+
+# ── V2 Models ──────────────────────────────────────────────────────────────────
+
+class DiscoveryCampaign(BaseModel):
+    id: Optional[str] = None
+    business_type: str
+    geographic_center: str
+    radius_miles: Optional[float] = 10.0
+    max_results: int = 50
+    status: Literal["discovering", "pending_approval", "approved", "rejected"] = "discovering"
+    discovered_count: int = 0
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+
+class DiscoveredBusiness(BaseModel):
+    id: Optional[str] = None
+    campaign_id: str
+    business_name: str
+    address: Optional[str] = None
+    phone: Optional[str] = None
+    website: Optional[str] = None
+    email: Optional[str] = None
+    rating: Optional[float] = None
+    distance_miles: Optional[float] = None
+    channel: Optional[Literal["email", "sms", "both", "none"]] = "none"
+    approved: bool = False
+    created_at: Optional[datetime] = None
+
+
+class SMSMessage(BaseModel):
+    id: Optional[str] = None
+    contact_id: str
+    phone_number: str
+    message_body: Optional[str] = None
+    status: Literal["draft", "approved", "sent", "delivered", "failed", "replied"] = "draft"
+    sent_at: Optional[datetime] = None
+    twilio_sid: Optional[str] = None
+    reply_received: bool = False
     created_at: Optional[datetime] = None
