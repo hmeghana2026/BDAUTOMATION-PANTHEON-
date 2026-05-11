@@ -1,4 +1,4 @@
-"""Streamlit dashboard for BD Automation Platform."""
+"""Streamlit dashboard for BD Automation Platform — Nothing Design System."""
 import os
 import sys
 import logging
@@ -6,20 +6,110 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime
 
-# Add project root to path
 sys.path.insert(0, os.path.dirname(__file__))
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+
+# ── Page config & design system ──────────────────────────────────────────────
+
 st.set_page_config(
-    page_title="BD Automation Platform",
-    page_icon="🚀",
+    page_title="BD Automation",
+    page_icon="⚫",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-# ── Session init ────────────────────────────────────────────────────────────
+
+def load_design_system():
+    st.markdown("""
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Doto:wght@400;700&family=Space+Grotesk:wght@300;400;500;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+    """, unsafe_allow_html=True)
+
+    css_path = os.path.join(os.path.dirname(__file__), "static", "styles.css")
+    if os.path.exists(css_path):
+        with open(css_path) as f:
+            st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
+
+
+load_design_system()
+
+
+# ── Nothing Design helpers ────────────────────────────────────────────────────
+
+def metric_card(label: str, value: str, delta: str = None, color: str = None):
+    delta_html = f'<div class="stats-delta">{delta}</div>' if delta else ''
+    color_class = f'text-{color}' if color else ''
+    st.markdown(f"""
+    <div class="stats-card">
+        <div class="stats-label">{label}</div>
+        <div class="stats-value {color_class}">{value}</div>
+        {delta_html}
+    </div>
+    """, unsafe_allow_html=True)
+
+
+def pipeline_card(label: str, count: int, status: str = ""):
+    status_class = f'status-{status}' if status else ''
+    st.markdown(f"""
+    <div class="pipeline-card">
+        <div class="pipeline-count {status_class}">{count}</div>
+        <div class="pipeline-label">{label}</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+
+def lead_card_header(company: str, status: str, date: str = ""):
+    status_colors = {
+        'new': 'text-secondary',
+        'researching': 'text-warning',
+        'drafted': 'text-warning',
+        'sent': 'text-secondary',
+        'meeting_set': 'text-success',
+        'dead': 'text-error',
+    }
+    color_class = status_colors.get(status, 'text-secondary')
+    date_display = f'<span class="text-secondary" style="font-size:12px;margin-left:8px;">{date}</span>' if date else ''
+    st.markdown(f"""
+    <div class="lead-header">
+        <div class="lead-title">{company}</div>
+        <div class="lead-status {color_class}">{status.upper().replace('_', ' ')}{date_display}</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+
+def section_header(title: str, subtitle: str = ""):
+    subtitle_html = f'<p class="text-secondary" style="margin-top:8px;font-size:14px;">{subtitle}</p>' if subtitle else ''
+    st.markdown(f"""
+    <div style="margin:48px 0 24px 0;">
+        <h2>{title}</h2>
+        {subtitle_html}
+    </div>
+    """, unsafe_allow_html=True)
+
+
+def label_value(label: str, value: str, color: str = None):
+    color_class = f'text-{color}' if color else 'text-primary'
+    st.markdown(f"""
+    <div style="margin:8px 0;">
+        <span class="label" style="margin-right:12px;">{label}</span>
+        <span class="{color_class}" style="font-family:var(--font-body);font-size:16px;">{value}</span>
+    </div>
+    """, unsafe_allow_html=True)
+
+
+def empty_state(text: str):
+    st.markdown(f"""
+    <div style="padding:96px 48px;text-align:center;">
+        <p class="text-secondary" style="font-family:var(--font-mono);font-size:14px;letter-spacing:0.08em;">{text}</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+
+# ── Session init ──────────────────────────────────────────────────────────────
 
 @st.cache_resource
 def get_db():
@@ -45,26 +135,36 @@ def db():
     return get_db()
 
 
-# ── Sidebar navigation ───────────────────────────────────────────────────────
+# ── Sidebar navigation ────────────────────────────────────────────────────────
 
-st.sidebar.title("🚀 BD Automation")
+st.sidebar.markdown("# BD AUTOMATION")
 page = st.sidebar.radio(
     "Navigate",
     ["Dashboard", "Add Lead", "Pipeline", "Emails", "Meetings & PRDs", "Analytics"],
     index=0,
 )
 
-# ── Header stats bar ─────────────────────────────────────────────────────────
+
+# ── Stats bar ─────────────────────────────────────────────────────────────────
 
 def render_stats_bar():
     try:
         stats = db().get_daily_stats()
         col1, col2, col3, col4, col5 = st.columns(5)
-        col1.metric("Leads Added Today", stats.leads_added)
-        col2.metric("Emails Sent Today", stats.emails_sent)
-        col3.metric("Replies Today", stats.replies_received)
-        col4.metric("Meetings Booked", stats.meetings_booked)
-        col5.metric("Email Budget Left", stats.emails_remaining_today, delta=f"/ 50")
+        with col1:
+            metric_card("LEADS ADDED", str(stats.leads_added), f"+{stats.leads_added} today")
+        with col2:
+            metric_card("EMAILS SENT", str(stats.emails_sent), f"+{stats.emails_sent} today")
+        with col3:
+            metric_card("REPLIES", str(stats.replies_received), f"+{stats.replies_received} today", color="success")
+        with col4:
+            metric_card("MEETINGS", str(stats.meetings_booked), f"+{stats.meetings_booked} today", color="success")
+        with col5:
+            metric_card(
+                "BUDGET LEFT",
+                f"{stats.emails_remaining_today}/50",
+                color="warning" if stats.emails_remaining_today < 10 else None,
+            )
     except Exception as e:
         st.warning(f"Could not load stats: {e}")
 
@@ -72,62 +172,65 @@ def render_stats_bar():
 # ── Pages ─────────────────────────────────────────────────────────────────────
 
 if page == "Dashboard":
-    st.title("BD Automation Dashboard")
+    section_header("Dashboard", "Real-time BD automation metrics")
     render_stats_bar()
-    st.divider()
+    st.markdown("<hr>", unsafe_allow_html=True)
 
-    st.subheader("Pipeline Overview")
+    section_header("Pipeline Overview")
     try:
         counts = db().get_pipeline_counts()
-        stages = ["new", "researching", "drafted", "sent", "meeting_set", "dead"]
-        labels = ["New", "Researching", "Drafted", "Sent", "Meeting Set", "Dead"]
-        cols = st.columns(len(stages))
-        colors = ["#3b82f6", "#f59e0b", "#8b5cf6", "#10b981", "#059669", "#ef4444"]
-        for col, stage, label, color in zip(cols, stages, labels, colors):
-            col.markdown(
-                f"""<div style="background:{color};color:white;border-radius:8px;
-                padding:16px;text-align:center;">
-                <div style="font-size:32px;font-weight:700">{counts.get(stage, 0)}</div>
-                <div style="font-size:12px;opacity:.85">{label}</div></div>""",
-                unsafe_allow_html=True,
-            )
+        col1, col2, col3, col4, col5, col6 = st.columns(6)
+        with col1:
+            pipeline_card("NEW", counts.get('new', 0), 'new')
+        with col2:
+            pipeline_card("RESEARCHING", counts.get('researching', 0), 'researching')
+        with col3:
+            pipeline_card("DRAFTED", counts.get('drafted', 0), 'drafted')
+        with col4:
+            pipeline_card("SENT", counts.get('sent', 0), 'sent')
+        with col5:
+            pipeline_card("MEETING SET", counts.get('meeting_set', 0), 'meeting_set')
+        with col6:
+            pipeline_card("DEAD", counts.get('dead', 0), 'dead')
     except Exception as e:
         st.error(f"Pipeline data unavailable: {e}")
 
-    st.divider()
-    st.subheader("Recent Leads")
+    st.markdown("<hr>", unsafe_allow_html=True)
+    section_header("Recent Leads")
     try:
         leads = db().list_leads()[:10]
         if leads:
             data = [
                 {
                     "Company": l.company_name,
-                    "Vertical": l.vertical,
+                    "Vertical": l.vertical.upper(),
                     "Geography": l.geography or "—",
-                    "Status": l.status,
+                    "Status": l.status.upper().replace('_', ' '),
                     "Added": l.created_at.strftime("%m/%d %H:%M") if l.created_at else "—",
                 }
                 for l in leads
             ]
-            st.dataframe(pd.DataFrame(data), use_container_width=True)
+            st.dataframe(pd.DataFrame(data), use_container_width=True, hide_index=True)
         else:
-            st.info("No leads yet. Add one from the sidebar!")
+            empty_state("NO LEADS YET — ADD ONE FROM THE SIDEBAR")
     except Exception as e:
         st.error(f"Could not load leads: {e}")
 
 
 elif page == "Add Lead":
-    st.title("Add New Lead")
-    st.caption("Adding a lead triggers automatic research within 2 hours (via Celery).")
+    section_header("Add New Lead", "Triggers automatic research within 30 minutes")
 
     with st.form("add_lead_form"):
         col1, col2 = st.columns(2)
-        company_name = col1.text_input("Company Name *", placeholder="Joe's Pizzeria")
-        vertical = col2.selectbox("Vertical *", ["restaurant", "vet", "dermatologist"])
+        company_name = col1.text_input("Company Name", placeholder="Joe's Pizzeria")
+        vertical = col2.selectbox("Vertical", ["restaurant", "vet", "dermatologist"])
         geography = col1.text_input("Geography", placeholder="Austin, TX")
         website = col2.text_input("Website", placeholder="joespizzeria.com")
 
-        st.subheader("Contact Info (optional — auto-discovered if blank)")
+        st.markdown("<hr style='margin:32px 0;'>", unsafe_allow_html=True)
+        st.markdown('<p class="label">CONTACT INFO (OPTIONAL — AUTO-DISCOVERED IF BLANK)</p>',
+                    unsafe_allow_html=True)
+
         col3, col4 = st.columns(2)
         contact_name = col3.text_input("Contact Name", placeholder="Joe Smith")
         contact_role = col4.text_input("Role", placeholder="Owner")
@@ -135,7 +238,7 @@ elif page == "Add Lead":
         contact_phone = col4.text_input("Phone", placeholder="+1 555 000 0000")
 
         auto_research = st.checkbox("Auto-research immediately (slower UI)", value=False)
-        submitted = st.form_submit_button("Add Lead", type="primary")
+        submitted = st.form_submit_button("ADD LEAD", type="primary")
 
     if submitted:
         if not company_name:
@@ -151,7 +254,6 @@ elif page == "Add Lead":
                         website=website or None,
                     )
                 )
-
                 if contact_name:
                     db().create_contact(
                         Contact(
@@ -162,16 +264,12 @@ elif page == "Add Lead":
                             phone=contact_phone or None,
                         )
                     )
-
-                st.success(f"Lead created: **{company_name}** (ID: `{lead.id[:8]}…`)")
-
+                st.success(f"✓ Lead created: **{company_name}** (ID: `{lead.id[:8]}…`)")
                 if auto_research:
-                    with st.spinner("Researching…"):
+                    with st.spinner("[RESEARCHING...]"):
                         agents = get_agents()
                         result = agents["research"].research_lead(lead)
                         db().update_lead_status(lead.id, "researching")
-
-                        # Update or create contact from research
                         if result.owner_name and not contact_name:
                             from database.models import Contact
                             db().create_contact(
@@ -183,63 +281,72 @@ elif page == "Add Lead":
                                     phone=result.phone,
                                 )
                             )
-                        st.success("Research complete!")
-                        st.json(result.model_dump())
+                        st.success("✓ Research complete!")
                 else:
-                    st.info("Research will run automatically in the background via Celery.")
-
+                    st.info("→ Research will run automatically in the background via Celery.")
             except Exception as e:
                 st.error(f"Failed to add lead: {e}")
                 logger.exception("Add lead error")
 
 
 elif page == "Pipeline":
-    st.title("Lead Pipeline")
+    section_header("Lead Pipeline", "Manage leads across all stages")
 
     status_filter = st.selectbox(
-        "Filter by status", ["all", "new", "researching", "drafted", "sent", "meeting_set", "dead"],
+        "Filter by status",
+        ["all", "new", "researching", "drafted", "sent", "meeting_set", "dead"],
         index=0,
     )
 
     try:
         leads = db().list_leads(status=None if status_filter == "all" else status_filter)
         if not leads:
-            st.info("No leads match this filter.")
+            empty_state(f"NO LEADS WITH STATUS: {status_filter.upper()}")
         else:
             for lead in leads:
-                with st.expander(f"**{lead.company_name}** — {lead.vertical} | {lead.status.upper()}"):
-                    col1, col2, col3 = st.columns([2, 2, 1])
-                    col1.write(f"**Geography:** {lead.geography or '—'}")
-                    col1.write(f"**Website:** {lead.website or '—'}")
-                    col2.write(f"**Created:** {lead.created_at.strftime('%Y-%m-%d') if lead.created_at else '—'}")
+                with st.expander(f"**{lead.company_name}**", expanded=False):
+                    lead_card_header(
+                        lead.company_name,
+                        lead.status,
+                        lead.created_at.strftime("%m/%d/%y") if lead.created_at else "",
+                    )
+                    st.markdown("<hr style='margin:16px 0;'>", unsafe_allow_html=True)
+
+                    label_value("VERTICAL", lead.vertical.upper())
+                    label_value("GEOGRAPHY", lead.geography or "—")
+                    label_value("WEBSITE", lead.website or "—")
 
                     contacts = db().get_contacts_for_lead(lead.id)
                     if contacts:
-                        st.write(f"**Contacts ({len(contacts)}):**")
+                        st.markdown('<p class="label" style="margin-top:24px;">CONTACTS</p>',
+                                    unsafe_allow_html=True)
                         for c in contacts:
-                            st.write(f"  - {c.name} ({c.role or 'Unknown'}) — {c.email or 'No email'}")
+                            st.markdown(f"→ {c.name} ({c.role or 'Unknown'}) — {c.email or 'No email'}")
 
-                    new_status = col3.selectbox(
-                        "Update status",
-                        ["new", "researching", "drafted", "sent", "meeting_set", "dead"],
-                        index=["new", "researching", "drafted", "sent", "meeting_set", "dead"].index(lead.status),
-                        key=f"status_{lead.id}",
-                    )
-                    if col3.button("Update", key=f"update_{lead.id}"):
-                        db().update_lead_status(lead.id, new_status)
-                        st.rerun()
-
+                    st.markdown("<hr style='margin:24px 0 16px 0;'>", unsafe_allow_html=True)
+                    col_a, col_b = st.columns([3, 1])
+                    with col_a:
+                        new_status = st.selectbox(
+                            "Update status",
+                            ["new", "researching", "drafted", "sent", "meeting_set", "dead"],
+                            index=["new", "researching", "drafted", "sent", "meeting_set", "dead"].index(lead.status),
+                            key=f"status_{lead.id}",
+                        )
+                    with col_b:
+                        if st.button("UPDATE", key=f"update_{lead.id}", type="primary"):
+                            db().update_lead_status(lead.id, new_status)
+                            st.rerun()
     except Exception as e:
         st.error(f"Pipeline load failed: {e}")
 
 
 elif page == "Emails":
-    st.title("Email Management")
+    section_header("Email Management")
 
     tab1, tab2 = st.tabs(["Draft Emails", "Email History"])
 
     with tab1:
-        st.subheader("Draft & Send Emails")
+        section_header("Draft & Send", "Compose personalized outreach")
         try:
             leads = db().list_leads(status="researching")
             if not leads:
@@ -262,7 +369,7 @@ elif page == "Emails":
                     sel_contact = contact_options[sel_contact_label]
 
                     if st.button("Draft Email", type="primary"):
-                        with st.spinner("Drafting personalized email…"):
+                        with st.spinner("[DRAFTING...]"):
                             from database.models import ResearchResult
                             research = ResearchResult(
                                 company_name=selected_lead.company_name,
@@ -277,26 +384,26 @@ elif page == "Emails":
 
                     if "draft_email" in st.session_state:
                         draft = st.session_state["draft_email"]
-                        st.subheader("Draft")
+                        st.markdown('<p class="label" style="margin-top:32px;">DRAFT</p>',
+                                    unsafe_allow_html=True)
                         subject = st.text_input("Subject", value=draft.subject)
                         body = st.text_area("Body", value=draft.body, height=200)
 
                         col_a, col_b = st.columns(2)
-                        if col_a.button("Save as Draft"):
+                        if col_a.button("SAVE AS DRAFT"):
                             draft.subject = subject
                             draft.body = body
                             db().create_email(draft)
                             db().update_lead_status(selected_lead.id, "drafted")
-                            st.success("Saved as draft!")
+                            st.success("[SAVED]")
                             del st.session_state["draft_email"]
-
-                        if col_b.button("Send Now", type="primary"):
+                        if col_b.button("SEND NOW", type="primary"):
                             if not sel_contact.email:
-                                st.error("Contact has no email address!")
+                                st.error("[ERROR: No email address for this contact]")
                             else:
                                 daily_count = db().count_emails_sent_today()
                                 if daily_count >= 50:
-                                    st.error("Daily email limit (50) reached. Try tomorrow.")
+                                    st.error("[ERROR: Daily limit of 50 emails reached]")
                                 else:
                                     draft.subject = subject
                                     draft.body = body
@@ -306,16 +413,16 @@ elif page == "Emails":
                                         selected_lead, sel_contact, email_record
                                     )
                                     if success:
-                                        st.success(f"Email sent to {sel_contact.email}!")
+                                        st.success(f"[SENT] → {sel_contact.email}")
                                         del st.session_state["draft_email"]
                                     else:
-                                        st.error("Send failed. Check logs.")
+                                        st.error("[ERROR: Send failed — check logs]")
             except Exception as e:
                 st.error(f"Email draft error: {e}")
                 logger.exception("Email draft error")
 
     with tab2:
-        st.subheader("Email History")
+        section_header("Email History", "All outreach activity")
         try:
             leads = db().list_leads()
             all_emails = []
@@ -329,25 +436,25 @@ elif page == "Emails":
                             "Contact": contact.name,
                             "Email": contact.email or "—",
                             "Subject": (email.subject or "")[:50],
-                            "Status": email.status,
+                            "Status": email.status.upper(),
                             "Sent At": email.sent_at.strftime("%m/%d %H:%M") if email.sent_at else "—",
                             "Reply": "✓" if email.reply_received else "—",
                         })
             if all_emails:
-                st.dataframe(pd.DataFrame(all_emails), use_container_width=True)
+                st.dataframe(pd.DataFrame(all_emails), use_container_width=True, hide_index=True)
             else:
-                st.info("No emails yet.")
+                empty_state("NO EMAILS YET")
         except Exception as e:
             st.error(f"Could not load email history: {e}")
 
 
 elif page == "Meetings & PRDs":
-    st.title("Meetings & PRDs")
+    section_header("Meetings & PRDs")
 
     tab1, tab2, tab3 = st.tabs(["Log Meeting", "Generate PRD", "Meeting History"])
 
     with tab1:
-        st.subheader("Log a New Meeting")
+        section_header("Log a New Meeting")
         try:
             leads = db().list_leads(status="sent")
             if not leads:
@@ -365,7 +472,7 @@ elif page == "Meetings & PRDs":
 
         scheduled_at = st.date_input("Meeting Date", value=datetime.utcnow().date())
 
-        if sel_contact and st.button("Log Meeting", type="primary"):
+        if sel_contact and st.button("LOG MEETING", type="primary"):
             try:
                 from database.models import Meeting
                 meeting = db().create_meeting(
@@ -375,13 +482,13 @@ elif page == "Meetings & PRDs":
                     )
                 )
                 db().update_lead_status(sel_lead.id, "meeting_set")
-                st.success(f"Meeting logged! ID: `{meeting.id[:8]}…`")
+                st.success(f"[LOGGED] Meeting ID: `{meeting.id[:8]}…`")
                 st.session_state["active_meeting_id"] = meeting.id
             except Exception as e:
                 st.error(f"Failed to log meeting: {e}")
 
     with tab2:
-        st.subheader("Generate PRD from Transcript")
+        section_header("Generate PRD", "From meeting transcript or audio")
 
         input_method = st.radio("Input method", ["Paste transcript", "Upload audio"])
         transcript_text = ""
@@ -392,7 +499,7 @@ elif page == "Meetings & PRDs":
         else:
             audio_file = st.file_uploader("Upload audio (mp3, m4a, wav)", type=["mp3", "m4a", "wav"])
             if audio_file and st.button("Transcribe"):
-                with st.spinner("Transcribing…"):
+                with st.spinner("[TRANSCRIBING...]"):
                     import tempfile
                     with tempfile.NamedTemporaryFile(suffix=f".{audio_file.name.split('.')[-1]}", delete=False) as tmp:
                         tmp.write(audio_file.read())
@@ -401,7 +508,7 @@ elif page == "Meetings & PRDs":
                         agents = get_agents()
                         transcript_text = agents["prd"].transcribe_audio(tmp_path)
                         st.session_state["transcript"] = transcript_text
-                        st.success("Transcription complete!")
+                        st.success("[DONE] Transcription complete")
                     except Exception as e:
                         st.error(f"Transcription failed: {e}")
 
@@ -411,8 +518,8 @@ elif page == "Meetings & PRDs":
 
         client_name = st.text_input("Client Name", placeholder="Joe's Pizzeria")
 
-        if transcript_text and st.button("Generate PRD", type="primary"):
-            with st.spinner("Generating PRD…"):
+        if transcript_text and st.button("GENERATE PRD", type="primary"):
+            with st.spinner("[GENERATING...]"):
                 try:
                     agents = get_agents()
                     prd = agents["prd"].generate_prd(transcript_text, client_name=client_name or "Client")
@@ -423,12 +530,13 @@ elif page == "Meetings & PRDs":
 
         if "generated_prd" in st.session_state:
             prd = st.session_state["generated_prd"]
-            st.subheader("Generated PRD")
+            st.markdown('<p class="label" style="margin-top:32px;">GENERATED PRD</p>',
+                        unsafe_allow_html=True)
             st.markdown(prd)
 
             col_a, col_b = st.columns(2)
             if col_a.button("Generate HTML Prototype"):
-                with st.spinner("Building prototype…"):
+                with st.spinner("[BUILDING...]"):
                     try:
                         agents = get_agents()
                         html = agents["prd"].generate_prototype_html(
@@ -442,7 +550,6 @@ elif page == "Meetings & PRDs":
                         )
                     except Exception as e:
                         st.error(f"Prototype generation failed: {e}")
-
             if col_b.button("Save PRD to Meeting"):
                 if "active_meeting_id" in st.session_state:
                     try:
@@ -450,14 +557,14 @@ elif page == "Meetings & PRDs":
                             st.session_state["active_meeting_id"],
                             {"prd_generated": prd, "transcript": transcript_text},
                         )
-                        st.success("PRD saved to meeting record!")
+                        st.success("[SAVED] PRD saved to meeting record")
                     except Exception as e:
                         st.error(f"Save failed: {e}")
                 else:
-                    st.warning("No active meeting logged. Log one in the 'Log Meeting' tab first.")
+                    st.warning("No active meeting. Log one in the 'Log Meeting' tab first.")
 
     with tab3:
-        st.subheader("Meeting History")
+        section_header("Meeting History")
         try:
             meetings = db().get_meetings()
             if meetings:
@@ -470,35 +577,33 @@ elif page == "Meetings & PRDs":
                     }
                     for m in meetings
                 ]
-                st.dataframe(pd.DataFrame(data), use_container_width=True)
+                st.dataframe(pd.DataFrame(data), use_container_width=True, hide_index=True)
             else:
-                st.info("No meetings logged yet.")
+                empty_state("NO MEETINGS LOGGED YET")
         except Exception as e:
             st.error(f"Could not load meetings: {e}")
 
 
 elif page == "Analytics":
-    st.title("Analytics")
+    section_header("Analytics", "Pipeline performance overview")
     render_stats_bar()
-    st.divider()
+    st.markdown("<hr>", unsafe_allow_html=True)
 
     try:
         leads = db().list_leads()
         if not leads:
-            st.info("No data yet. Add leads to see analytics.")
+            empty_state("NO DATA YET — ADD LEADS TO SEE ANALYTICS")
         else:
-            # Pipeline funnel
             counts = db().get_pipeline_counts()
             stages = ["new", "researching", "drafted", "sent", "meeting_set"]
             labels = ["New", "Researching", "Drafted", "Sent", "Meeting Set"]
             values = [counts.get(s, 0) for s in stages]
 
+            section_header("Pipeline Funnel")
             df_funnel = pd.DataFrame({"Stage": labels, "Count": values})
-            st.subheader("Pipeline Funnel")
             st.bar_chart(df_funnel.set_index("Stage"))
 
-            # Vertical breakdown
-            st.subheader("Leads by Vertical")
+            section_header("Leads by Vertical")
             vertical_counts = {}
             for l in leads:
                 vertical_counts[l.vertical] = vertical_counts.get(l.vertical, 0) + 1
@@ -508,15 +613,23 @@ elif page == "Analytics":
             if not df_vert.empty:
                 st.bar_chart(df_vert.set_index("Vertical"))
 
-            # Reply rate
             total_sent = counts.get("sent", 0) + counts.get("meeting_set", 0)
             if total_sent:
-                st.subheader("Conversion Rates")
+                section_header("Conversion Rates")
                 col1, col2, col3 = st.columns(3)
-                col1.metric("Research Rate", f"{int(100*(counts.get('researching',0)+counts.get('drafted',0)+counts.get('sent',0)+counts.get('meeting_set',0)) / max(len(leads),1))}%")
-                col2.metric("Send Rate", f"{int(100*(total_sent) / max(len(leads),1))}%")
-                col3.metric("Meeting Rate", f"{int(100*counts.get('meeting_set',0) / max(total_sent,1))}%")
-
+                with col1:
+                    metric_card(
+                        "RESEARCH RATE",
+                        f"{int(100*(counts.get('researching',0)+counts.get('drafted',0)+counts.get('sent',0)+counts.get('meeting_set',0)) / max(len(leads),1))}%",
+                    )
+                with col2:
+                    metric_card("SEND RATE", f"{int(100*total_sent / max(len(leads),1))}%")
+                with col3:
+                    metric_card(
+                        "MEETING RATE",
+                        f"{int(100*counts.get('meeting_set',0) / max(total_sent,1))}%",
+                        color="success",
+                    )
     except Exception as e:
         st.error(f"Analytics error: {e}")
         logger.exception("Analytics error")
