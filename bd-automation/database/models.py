@@ -78,3 +78,39 @@ class DailyStats(BaseModel):
     replies_received: int = 0
     meetings_booked: int = 0
     emails_remaining_today: int = 50
+
+
+class ResearchLog(BaseModel):
+    id: Optional[str] = None
+    lead_id: str
+    scraped_content: Optional[str] = None
+    extracted_data: Optional[dict] = None
+    insights: Optional[str] = None
+    email_verification_status: Optional[Literal["not_found", "verified", "unverified", "skipped"]] = None
+    hunter_confidence: Optional[int] = None
+    scrape_duration_ms: Optional[int] = None
+    created_at: Optional[datetime] = None
+
+
+class TaskLog(BaseModel):
+    id: Optional[str] = None
+    lead_id: Optional[str] = None
+    task_type: Literal["research", "draft", "send", "followup", "cleanup"]
+    status: Literal["pending", "running", "completed", "failed"] = "pending"
+    progress_pct: int = 0
+    message: Optional[str] = None
+    error_details: Optional[str] = None
+    started_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    created_at: Optional[datetime] = None
+
+
+class LeadScore(BaseModel):
+    id: Optional[str] = None
+    lead_id: str
+    priority_score: int = 50
+    website_quality_score: int = 0
+    contact_quality_score: int = 0
+    research_quality_score: int = 0
+    last_calculated: Optional[datetime] = None
+    created_at: Optional[datetime] = None

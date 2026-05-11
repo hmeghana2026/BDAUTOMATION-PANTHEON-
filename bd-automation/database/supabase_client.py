@@ -3,7 +3,7 @@ import logging
 from typing import Optional
 from datetime import datetime, timedelta
 from supabase import create_client, Client
-from .models import Lead, Contact, Email, Meeting, DailyStats
+from .models import Lead, Contact, Email, Meeting, DailyStats, ResearchLog, TaskLog, LeadScore
 
 logger = logging.getLogger(__name__)
 
@@ -176,6 +176,110 @@ class SupabaseDB:
         for row in result.data:
             counts[row["status"]] = counts.get(row["status"], 0) + 1
         return counts
+
+    # ── Research Logs ──────────────────────────────────────────────────
+
+    def create_research_log(self, log: ResearchLog) -> ResearchLog:
+        data = log.model_dump(exclude={"id", "created_at"})
+        if data.get("extracted_data") is not None:
+            import json
+            data["extracted_data"] = data["extracted_data"]
+        result = self.client.table("research_logs").insert(data).execute()
+        return ResearchLog(**result.data[0])
+
+    def get_research_logs_for_lead(self, lead_id: str) -> list[ResearchLog]:
+        result = (
+            self.client.table("research_logs")
+            .select("*")
+            .eq("lead_id", lead_id)
+            .order("created_at", desc=True)
+            .execute()
+        )
+        return [ResearchLog(**row) for row in result.data]
+
+    # ── Lead Scores ────────────────────────────────────────────────────
+
+    def get_lead_score(self, lead_id: str) -> Optional[LeadScore]:
+        result = (
+            self.client.table("lead_scores").select("*").eq("lead_id", lead_id).execute()
+        )
+        if result.data:
+            return LeadScore(**result.data[0])
+        return None
+
+    def upsert_lead_score(self, score: LeadScore) -> LeadScore:
+        data = score.model_dump(exclude={"id", "created_at", "last_calculated"})
+        result = (
+            self.client.table("lead_scores")
+            .upsert(data, on_conflict="lead_id")
+            .execute()
+        )
+        return LeadScore(**result.data[0])
+
+    def list_leads_by_priority(self, status: Optional[str] = None) -> list[Lead]:
+        """Return leads ordered by priority score descending."""
+        query = (
+            self.client.table("leads")
+            .select("*, lead_scores(priority_score)")
+            .order("created_at", desc=True)
+        )
+        if status:
+            query = query.eq("status", status)
+        result = query.execute()
+        leads = [Lead(**{k: v for k, v in row.items() if k != "lead_scores"}) for row in result.data]
+        scores = {
+            row["id"]: (row.get("lead_scores") or [{}])[0].get("priority_score", 50)
+            if isinstance(row.get("lead_scores"), list)
+            else (row.get("lead_scores") or {}).get("priority_score", 50)
+            for row in result.data
+        }
+        return sorted(leads, key=lambda l: scores.get(l.id, 50), reverse=True)
+
+    # ── Task Logs ──────────────────────────────────────────────────────
+
+    def create_task_log(self, log: TaskLog) -> TaskLog:
+        data = log.model_dump(exclude={"id", "created_at"})
+        for dt_field in ("started_at", "completed_at"):
+            if data.get(dt_field) and hasattr(data[dt_field], "isoformat"):
+                data[dt_field] = data[dt_field].isoformat()
+        result = self.client.table("task_logs").insert(data).execute()
+        return TaskLog(**result.data[0])
+
+    def update_task_log(self, task_id: str, updates: dict) -> TaskLog:
+        for dt_field in ("started_at", "completed_at"):
+            if updates.get(dt_field) and hasattr(updates[dt_field], "isoformat"):
+                updates[dt_field] = updates[dt_field].isoformat()
+        result = (
+            self.client.table("task_logs")
+            .update(updates)
+            .eq("id", task_id)
+            .execute()
+        )
+        return TaskLog(**result.data[0])
+
+    def get_recent_activity(self, limit: int = 20) -> list[TaskLog]:
+        result = (
+            self.client.table("task_logs")
+            .select("*")
+            .order("created_at", desc=True)
+            .limit(limit)
+            .execute()
+        )
+        return [TaskLog(**row) for row in result.data]
+
+    def get_active_tasks(self, hours: int = 1) -> list[TaskLog]:
+        cutoff = (datetime.utcnow() - timedelta(hours=hours)).isoformat()
+        result = (
+            self.client.table("task_logs")
+            .select("*")
+            .in_("status", ["pending", "running"])
+            .gte("created_at", cutoff)
+            .order("created_at", desc=True)
+            .execute()
+        )
+        return [TaskLog(**row) for row in result.data]
+
+    # ── Analytics ──────────────────────────────────────────────────────
 
     def get_daily_stats(self) -> DailyStats:
         today_start = datetime.utcnow().replace(hour=0, minute=0, second=0).isoformat()

@@ -140,9 +140,78 @@ def db():
 st.sidebar.markdown("# BD AUTOMATION")
 page = st.sidebar.radio(
     "Navigate",
-    ["Dashboard", "Add Lead", "Pipeline", "Emails", "Meetings & PRDs", "Analytics"],
+    ["Dashboard", "Add Lead", "Pipeline", "Emails", "Meetings & PRDs", "Analytics", "Research Insights"],
     index=0,
 )
+
+
+# ── Activity feed & active tasks ──────────────────────────────────────────────
+
+_TASK_STATUS_ICONS = {
+    "completed": "✓",
+    "failed": "✗",
+    "running": "→",
+    "pending": "·",
+}
+
+_TASK_STATUS_COLORS = {
+    "completed": "success",
+    "failed": "error",
+    "running": "warning",
+    "pending": "secondary",
+}
+
+
+def render_active_tasks():
+    try:
+        tasks = db().get_active_tasks(hours=2)
+        if not tasks:
+            return
+        st.markdown('<p class="label" style="margin-bottom:12px;">ACTIVE TASKS</p>', unsafe_allow_html=True)
+        for t in tasks:
+            icon = _TASK_STATUS_ICONS.get(t.status, "·")
+            color = _TASK_STATUS_COLORS.get(t.status, "secondary")
+            pct = t.progress_pct or 0
+            msg = t.message or t.task_type.upper()
+            st.markdown(f"""
+            <div style="background:var(--surface);border:1px solid var(--border-visible);border-radius:8px;padding:12px 16px;margin-bottom:8px;">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+                    <span style="font-family:var(--font-body);font-size:14px;color:var(--text-primary);">{msg}</span>
+                    <span class="text-{color}" style="font-family:var(--font-mono);font-size:11px;letter-spacing:0.06em;">{icon} {t.status.upper()}</span>
+                </div>
+                <div style="background:var(--border);border-radius:2px;height:2px;">
+                    <div style="background:var(--accent);width:{pct}%;height:2px;border-radius:2px;"></div>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+        st.markdown("<hr>", unsafe_allow_html=True)
+    except Exception:
+        pass
+
+
+def render_activity_feed(limit: int = 10):
+    section_header("Recent Activity", "Audit log of all automation")
+    try:
+        activity = db().get_recent_activity(limit=limit)
+        if not activity:
+            empty_state("NO ACTIVITY YET — ADD LEADS TO GET STARTED")
+            return
+        for t in activity:
+            icon = _TASK_STATUS_ICONS.get(t.status, "·")
+            color = _TASK_STATUS_COLORS.get(t.status, "secondary")
+            ts = t.created_at.strftime("%m/%d %H:%M") if t.created_at else "—"
+            msg = t.message or t.task_type.upper()
+            st.markdown(f"""
+            <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--border);">
+                <div>
+                    <span class="text-{color}" style="font-family:var(--font-mono);font-size:13px;margin-right:10px;">{icon}</span>
+                    <span style="font-family:var(--font-body);font-size:14px;color:var(--text-primary);">{msg}</span>
+                </div>
+                <span class="label">{ts}</span>
+            </div>
+            """, unsafe_allow_html=True)
+    except Exception as e:
+        st.error(f"Could not load activity: {e}")
 
 
 # ── Stats bar ─────────────────────────────────────────────────────────────────
@@ -173,6 +242,7 @@ def render_stats_bar():
 
 if page == "Dashboard":
     section_header("Dashboard", "Real-time BD automation metrics")
+    render_active_tasks()
     render_stats_bar()
     st.markdown("<hr>", unsafe_allow_html=True)
 
@@ -215,6 +285,9 @@ if page == "Dashboard":
             empty_state("NO LEADS YET — ADD ONE FROM THE SIDEBAR")
     except Exception as e:
         st.error(f"Could not load leads: {e}")
+
+    st.markdown("<hr>", unsafe_allow_html=True)
+    render_activity_feed(limit=10)
 
 
 elif page == "Add Lead":
@@ -633,3 +706,117 @@ elif page == "Analytics":
     except Exception as e:
         st.error(f"Analytics error: {e}")
         logger.exception("Analytics error")
+
+
+elif page == "Research Insights":
+    section_header("Research Insights", "Full visibility into what the agent discovered for each lead")
+
+    try:
+        leads = db().list_leads()
+        if not leads:
+            empty_state("NO LEADS YET — ADD ONE FROM THE SIDEBAR")
+        else:
+            lead_options = {f"{l.company_name} ({l.status.upper()})": l for l in leads}
+            selected_label = st.selectbox("Select Lead", list(lead_options.keys()))
+            selected_lead = lead_options.get(selected_label)
+
+            if selected_lead:
+                st.markdown("<hr>", unsafe_allow_html=True)
+
+                # Priority score row
+                from agents.automation_rules import AutomationRules
+                rules = AutomationRules(db=db())
+                components = rules.calculate_score_components(selected_lead)
+
+                lead_card_header(
+                    selected_lead.company_name,
+                    selected_lead.status,
+                    selected_lead.created_at.strftime("%m/%d/%y") if selected_lead.created_at else "",
+                )
+
+                st.markdown('<p class="label" style="margin:24px 0 12px 0;">PRIORITY SCORE</p>',
+                            unsafe_allow_html=True)
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    metric_card("TOTAL", f"{components['total']}/100",
+                                color="success" if components["total"] >= 60 else "warning" if components["total"] >= 40 else "error")
+                with col2:
+                    metric_card("WEBSITE", f"{components['website']}/20")
+                with col3:
+                    metric_card("CONTACT", f"{components['contact']}/15")
+                with col4:
+                    metric_card("RESEARCH", f"{components['research']}/30")
+
+                st.markdown("<hr>", unsafe_allow_html=True)
+
+                col_left, col_right = st.columns(2)
+
+                with col_left:
+                    st.markdown('<p class="label" style="margin-bottom:12px;">DISCOVERED CONTACTS</p>',
+                                unsafe_allow_html=True)
+                    contacts = db().get_contacts_for_lead(selected_lead.id)
+                    if contacts:
+                        for c in contacts:
+                            email_status = ""
+                            logs = db().get_research_logs_for_lead(selected_lead.id)
+                            if logs and logs[0].email_verification_status:
+                                status_colors = {"verified": "success", "unverified": "error",
+                                                 "not_found": "error", "skipped": "secondary"}
+                                ev = logs[0].email_verification_status
+                                email_status = f'<span class="text-{status_colors.get(ev, "secondary")}" style="font-size:11px;font-family:var(--font-mono);margin-left:8px;">{ev.upper()}</span>'
+                            st.markdown(f"""
+                            <div class="lead-card" style="margin-bottom:8px;">
+                                <div style="font-size:15px;font-weight:500;color:var(--text-display);">{c.name}</div>
+                                <div class="label" style="margin-top:4px;">{c.role or "Unknown role"}</div>
+                                <div style="margin-top:8px;font-size:14px;color:var(--text-primary);">
+                                    {c.email or "No email"}{email_status}
+                                </div>
+                                {"<div style='font-size:14px;color:var(--text-secondary);'>" + c.phone + "</div>" if c.phone else ""}
+                            </div>
+                            """, unsafe_allow_html=True)
+                    else:
+                        empty_state("NO CONTACTS FOUND")
+
+                    st.markdown("<div style='margin-top:16px;'></div>", unsafe_allow_html=True)
+                    if st.button("Re-run Research", type="primary"):
+                        with st.spinner("[RESEARCHING...]"):
+                            try:
+                                from agents.lead_research import LeadResearchAgent
+                                agent = LeadResearchAgent(db=db())
+                                result = agent.research_lead(selected_lead)
+                                db().update_lead_status(selected_lead.id, "researching")
+                                st.success(f"[DONE] Research updated for {selected_lead.company_name}")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Research failed: {e}")
+
+                with col_right:
+                    st.markdown('<p class="label" style="margin-bottom:12px;">RESEARCH HISTORY</p>',
+                                unsafe_allow_html=True)
+                    logs = db().get_research_logs_for_lead(selected_lead.id)
+                    if logs:
+                        for log in logs:
+                            ts = log.created_at.strftime("%m/%d %H:%M") if log.created_at else "—"
+                            ev_color = {"verified": "success", "unverified": "error",
+                                        "not_found": "error", "skipped": "secondary"}.get(
+                                log.email_verification_status or "skipped", "secondary")
+                            confidence_html = f'<div style="margin-top:4px;"><span class="label">HUNTER CONFIDENCE</span> <span class="text-primary">{log.hunter_confidence}%</span></div>' if log.hunter_confidence else ""
+                            duration_html = f'<div style="margin-top:4px;"><span class="label">SCRAPE</span> <span class="text-secondary">{log.scrape_duration_ms}ms</span></div>' if log.scrape_duration_ms else ""
+                            insights_html = f'<div style="margin-top:8px;font-size:13px;color:var(--text-secondary);line-height:1.5;">{(log.insights or "")[:200]}{"…" if log.insights and len(log.insights) > 200 else ""}</div>' if log.insights else ""
+                            st.markdown(f"""
+                            <div style="background:var(--surface);border:1px solid var(--border-visible);border-radius:8px;padding:16px;margin-bottom:8px;">
+                                <div style="display:flex;justify-content:space-between;align-items:center;">
+                                    <span class="label">{ts}</span>
+                                    <span class="text-{ev_color}" style="font-family:var(--font-mono);font-size:11px;letter-spacing:0.06em;">{(log.email_verification_status or "skipped").upper()}</span>
+                                </div>
+                                {confidence_html}
+                                {duration_html}
+                                {insights_html}
+                            </div>
+                            """, unsafe_allow_html=True)
+                    else:
+                        empty_state("NO RESEARCH LOGS — RUN RESEARCH FIRST")
+
+    except Exception as e:
+        st.error(f"Research Insights error: {e}")
+        logger.exception("Research Insights error")

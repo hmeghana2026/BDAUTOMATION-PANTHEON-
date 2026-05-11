@@ -1,6 +1,7 @@
 """Celery background tasks for BD Automation Platform."""
 import os
 import logging
+from datetime import datetime
 from celery import Celery
 from celery.schedules import crontab
 from dotenv import load_dotenv
@@ -59,26 +60,49 @@ app.conf.beat_schedule = {
 
 @app.task(bind=True, max_retries=3, default_retry_delay=60)
 def research_new_leads(self):
-    """Research all leads in 'new' status."""
+    """Research all leads in 'new' status, skipping recently-researched and prioritising by score."""
     try:
         from database.supabase_client import SupabaseDB
         from agents.lead_research import LeadResearchAgent
-        from database.models import Contact
+        from agents.automation_rules import AutomationRules
+        from database.models import Contact, TaskLog
 
         database = SupabaseDB()
-        agent = LeadResearchAgent()
+        agent = LeadResearchAgent(db=database)
+        rules = AutomationRules(db=database)
 
         new_leads = database.list_leads(status="new")
         logger.info(f"Researching {len(new_leads)} new leads")
 
-        results = {"processed": 0, "failed": 0, "contacts_created": 0}
+        # Prioritize: higher-scored leads first
+        prioritized = rules.prioritize_leads(new_leads)
+        results = {"processed": 0, "failed": 0, "skipped": 0, "contacts_created": 0}
 
-        for lead in new_leads:
+        for lead, score in prioritized:
+            # Skip gate
+            should_skip, skip_reason = rules.should_skip_lead(lead)
+            if should_skip:
+                logger.info(f"Skipping {lead.company_name}: {skip_reason}")
+                results["skipped"] += 1
+                continue
+
+            task_log = database.create_task_log(TaskLog(
+                lead_id=lead.id,
+                task_type="research",
+                status="running",
+                message=f"Researching {lead.company_name} (score: {score})",
+                started_at=datetime.utcnow(),
+                progress_pct=0,
+            ))
+
             try:
                 database.update_lead_status(lead.id, "researching")
+                database.update_task_log(task_log.id, {"progress_pct": 30})
+
                 research = agent.research_lead(lead)
 
-                # Create contact from research findings
+                database.update_task_log(task_log.id, {"progress_pct": 70})
+
                 if research.owner_name or research.email:
                     contact = Contact(
                         lead_id=lead.id,
@@ -90,13 +114,24 @@ def research_new_leads(self):
                     database.create_contact(contact)
                     results["contacts_created"] += 1
 
+                database.update_task_log(task_log.id, {
+                    "status": "completed",
+                    "progress_pct": 100,
+                    "message": f"Research complete for {lead.company_name}",
+                    "completed_at": datetime.utcnow(),
+                })
                 results["processed"] += 1
                 logger.info(f"Researched: {lead.company_name}")
 
             except Exception as e:
                 logger.error(f"Failed to research {lead.company_name}: {e}")
+                database.update_task_log(task_log.id, {
+                    "status": "failed",
+                    "error_details": str(e),
+                    "completed_at": datetime.utcnow(),
+                })
                 results["failed"] += 1
-                database.update_lead_status(lead.id, "new")  # Reset for retry
+                database.update_lead_status(lead.id, "new")
 
         return results
 
@@ -156,14 +191,16 @@ def draft_emails_for_researched_leads(self):
 
 @app.task(bind=True, max_retries=2)
 def auto_send_drafted_emails(self):
-    """Auto-send (Option C): Send all drafted emails, respecting daily limit."""
+    """Auto-send drafted emails, applying quality gates via AutomationRules."""
     try:
         from database.supabase_client import SupabaseDB
         from agents.followup import FollowUpAgent
-        from database.models import Email
+        from agents.automation_rules import AutomationRules
+        from database.models import TaskLog
 
         database = SupabaseDB()
         agent = FollowUpAgent()
+        rules = AutomationRules(db=database)
 
         daily_sent = database.count_emails_sent_today()
         budget = 50 - daily_sent
@@ -173,32 +210,75 @@ def auto_send_drafted_emails(self):
             return {"sent": 0, "reason": "budget_exhausted"}
 
         drafted_leads = database.list_leads(status="drafted")
-        results = {"sent": 0, "failed": 0, "skipped": 0}
+        results = {"sent": 0, "failed": 0, "skipped": 0, "blocked_by_rules": 0}
 
         for lead in drafted_leads:
             if results["sent"] >= budget:
                 break
+
+            # Quality gate
+            should_send, reason = rules.should_auto_send(lead)
+            if not should_send:
+                logger.info(f"Blocking auto-send for {lead.company_name}: {reason}")
+                results["blocked_by_rules"] += 1
+                continue
+
+            task_log = database.create_task_log(TaskLog(
+                lead_id=lead.id,
+                task_type="send",
+                status="running",
+                message=f"Sending email for {lead.company_name}",
+                started_at=datetime.utcnow(),
+                progress_pct=0,
+            ))
+
             try:
                 contacts = database.get_contacts_for_lead(lead.id)
                 contact = next((c for c in contacts if c.email), None)
                 if not contact:
+                    database.update_task_log(task_log.id, {
+                        "status": "failed",
+                        "error_details": "No contact with email",
+                        "completed_at": datetime.utcnow(),
+                    })
                     results["skipped"] += 1
                     continue
 
                 emails = database.get_emails_for_contact(contact.id)
                 draft = next((e for e in emails if e.status == "draft"), None)
                 if not draft:
+                    database.update_task_log(task_log.id, {
+                        "status": "failed",
+                        "error_details": "No draft email found",
+                        "completed_at": datetime.utcnow(),
+                    })
                     results["skipped"] += 1
                     continue
 
                 success = agent.send_initial_sequence(lead, contact, draft)
                 if success:
+                    database.update_task_log(task_log.id, {
+                        "status": "completed",
+                        "progress_pct": 100,
+                        "message": f"Email sent to {contact.email}",
+                        "completed_at": datetime.utcnow(),
+                    })
                     results["sent"] += 1
                 else:
+                    database.update_task_log(task_log.id, {
+                        "status": "failed",
+                        "error_details": "Send returned False",
+                        "completed_at": datetime.utcnow(),
+                    })
                     results["failed"] += 1
 
             except Exception as e:
                 logger.error(f"Auto-send failed for {lead.company_name}: {e}")
+                database.update_task_log(task_log.id, {
+                    "status": "failed",
+                    "error_details": str(e),
+                    "completed_at": datetime.utcnow(),
+                })
                 results["failed"] += 1
 
         logger.info(f"Auto-send complete: {results}")
