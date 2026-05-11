@@ -43,10 +43,10 @@ app.conf.beat_schedule = {
         "task": "tasks.auto_send_drafted_emails",
         "schedule": crontab(hour=9, minute=0),
     },
-    # Run follow-up sequences at 10 AM UTC daily
+    # Run follow-up sequences every 2 hours
     "run-followup-sequences": {
-        "task": "tasks.run_followup_sequences",
-        "schedule": crontab(hour=10, minute=0),
+        "task": "tasks.process_follow_ups",
+        "schedule": crontab(minute=0, hour="*/2"),
     },
     # Clean up expired sequences at midnight
     "cleanup-expired-sequences": {
@@ -317,6 +317,133 @@ def cleanup_expired_sequences():
     except Exception as e:
         logger.error(f"Cleanup failed: {e}")
         return {"error": str(e)}
+
+
+@app.task(bind=True, max_retries=3, default_retry_delay=300)
+def process_follow_ups(self):
+    """Run follow-up sequence every 2 hours for all active leads."""
+    try:
+        from agents.followup import FollowUpAgent
+        agent = FollowUpAgent()
+        return agent.run_daily_followups()
+    except Exception as exc:
+        raise self.retry(exc=exc)
+
+
+@app.task(bind=True, max_retries=2)
+def bulk_discover(self, campaign_id: str):
+    """V2: Run bulk discovery for a campaign, store results, mark pending_approval."""
+    try:
+        from database.supabase_client import SupabaseDB
+        from agents.bulk_discovery import BulkDiscoveryAgent
+        from database.models import DiscoveredBusiness
+
+        database = SupabaseDB()
+        campaign = database.get_campaign(campaign_id)
+        if not campaign:
+            return {"error": f"Campaign {campaign_id} not found"}
+
+        agent = BulkDiscoveryAgent()
+        businesses = agent.discover_businesses(
+            business_type=campaign.business_type,
+            geographic_center=campaign.geographic_center,
+            radius_miles=campaign.radius_miles or 10.0,
+            max_results=campaign.max_results,
+        )
+
+        created = 0
+        for biz in businesses:
+            try:
+                database.create_discovered_business(DiscoveredBusiness(
+                    campaign_id=campaign_id,
+                    business_name=biz["business_name"],
+                    address=biz.get("address"),
+                    phone=biz.get("phone"),
+                    website=biz.get("website"),
+                    email=biz.get("email"),
+                    rating=biz.get("rating"),
+                    channel=biz.get("channel", "none"),
+                ))
+                created += 1
+            except Exception as e:
+                logger.error(f"Failed to store business {biz.get('business_name')}: {e}")
+
+        database.update_campaign(campaign_id, {
+            "status": "pending_approval",
+            "discovered_count": created,
+        })
+        logger.info(f"Campaign {campaign_id}: discovered {created} businesses")
+        return {"campaign_id": campaign_id, "discovered": created}
+
+    except Exception as exc:
+        logger.error(f"bulk_discover failed for {campaign_id}: {exc}")
+        raise self.retry(exc=exc)
+
+
+@app.task(bind=True, max_retries=3, default_retry_delay=60)
+def send_email(self, email_id: str):
+    """V1-compatible: Send a single email by ID."""
+    try:
+        from database.supabase_client import SupabaseDB
+        from agents.followup import FollowUpAgent
+
+        database = SupabaseDB()
+        email_record = database.client.table("emails").select("*").eq("id", email_id).execute()
+        if not email_record.data:
+            return {"error": f"Email {email_id} not found"}
+
+        from database.models import Email, Contact, Lead
+        email = Email(**email_record.data[0])
+        contact = database.get_contact(email.contact_id)
+        if not contact or not contact.email:
+            return {"error": "Contact or email address missing"}
+
+        contacts_for_lead = database.get_contacts_for_lead(contact.lead_id)
+        lead = database.get_lead(contact.lead_id)
+        if not lead:
+            return {"error": "Lead not found"}
+
+        daily_sent = database.count_emails_sent_today()
+        if daily_sent >= 50:
+            return {"status": "skipped", "reason": "daily_limit_reached"}
+
+        agent = FollowUpAgent()
+        success = agent.send_initial_sequence(lead, contact, email)
+        return {"status": "sent" if success else "failed"}
+
+    except Exception as exc:
+        raise self.retry(exc=exc)
+
+
+@app.task(bind=True, max_retries=3, default_retry_delay=60)
+def send_sms(self, sms_id: str):
+    """V2: Send a single SMS message by ID via Twilio."""
+    try:
+        from database.supabase_client import SupabaseDB
+        from integrations.twilio_client import TwilioClient
+
+        database = SupabaseDB()
+        sms = database.get_sms(sms_id)
+        if not sms:
+            return {"error": f"SMS {sms_id} not found"}
+
+        daily_sent = database.count_sms_sent_today()
+        if daily_sent >= 50:
+            logger.info("Daily SMS limit reached — skipping")
+            return {"status": "skipped", "reason": "daily_sms_limit_reached"}
+
+        twilio = TwilioClient()
+        sid = twilio.send_sms(sms.phone_number, sms.message_body or "")
+        if sid:
+            database.update_sms_status(sms_id, "sent", twilio_sid=sid, sent_at=datetime.utcnow())
+            return {"status": "sent", "twilio_sid": sid}
+        else:
+            database.update_sms_status(sms_id, "failed")
+            return {"status": "failed"}
+
+    except Exception as exc:
+        logger.error(f"send_sms failed for {sms_id}: {exc}")
+        raise self.retry(exc=exc)
 
 
 @app.task(bind=True, max_retries=2)

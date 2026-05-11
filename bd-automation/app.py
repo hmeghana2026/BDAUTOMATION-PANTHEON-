@@ -140,7 +140,7 @@ def db():
 st.sidebar.markdown("# BD AUTOMATION")
 page = st.sidebar.radio(
     "Navigate",
-    ["Dashboard", "Add Lead", "Pipeline", "Emails", "Meetings & PRDs", "Analytics", "Research Insights"],
+    ["Dashboard", "Add Lead", "Bulk Discovery", "Pipeline", "Emails", "Meetings & PRDs", "Analytics", "Research Insights"],
     index=0,
 )
 
@@ -360,6 +360,219 @@ elif page == "Add Lead":
             except Exception as e:
                 st.error(f"Failed to add lead: {e}")
                 logger.exception("Add lead error")
+
+
+elif page == "Bulk Discovery":
+    section_header("Bulk Discovery", "Find 50-200 businesses at once via Google Maps")
+
+    tab_launch, tab_queue = st.tabs(["Launch Campaign", "Approval Queue"])
+
+    with tab_launch:
+        section_header("New Discovery Campaign", "Search by business type + location radius")
+
+        with st.form("bulk_discovery_form"):
+            col1, col2 = st.columns(2)
+            business_type = col1.text_input("Business Type", placeholder="restaurant")
+            geographic_center = col2.text_input("Location", placeholder="Austin, TX")
+            radius_miles = col1.number_input("Radius (miles)", min_value=1.0, max_value=50.0, value=10.0, step=1.0)
+            max_results = col2.number_input("Max Results", min_value=10, max_value=200, value=50, step=10)
+            submitted = st.form_submit_button("DISCOVER BUSINESSES", type="primary")
+
+        if submitted:
+            if not business_type or not geographic_center:
+                st.error("Business type and location are required.")
+            else:
+                try:
+                    from database.models import DiscoveryCampaign
+                    campaign = db().create_campaign(DiscoveryCampaign(
+                        business_type=business_type,
+                        geographic_center=geographic_center,
+                        radius_miles=radius_miles,
+                        max_results=int(max_results),
+                        status="discovering",
+                    ))
+                    from tasks import bulk_discover
+                    bulk_discover.delay(campaign.id)
+                    st.success(
+                        f"Campaign launched! ID: `{campaign.id[:8]}…` — "
+                        f"Discovering {int(max_results)} {business_type}s near {geographic_center}. "
+                        f"Reload the Approval Queue in a few minutes."
+                    )
+                except Exception as e:
+                    st.error(f"Failed to launch campaign: {e}")
+                    logger.exception("Bulk discovery launch error")
+
+        st.markdown("<hr>", unsafe_allow_html=True)
+        section_header("Recent Campaigns")
+        try:
+            campaigns = db().list_campaigns()
+            if campaigns:
+                data = [
+                    {
+                        "ID": c.id[:8] + "…",
+                        "Type": c.business_type,
+                        "Location": c.geographic_center,
+                        "Radius (mi)": c.radius_miles,
+                        "Max": c.max_results,
+                        "Found": c.discovered_count,
+                        "Status": c.status.upper().replace("_", " "),
+                        "Created": c.created_at.strftime("%m/%d %H:%M") if c.created_at else "—",
+                    }
+                    for c in campaigns
+                ]
+                st.dataframe(pd.DataFrame(data), use_container_width=True, hide_index=True)
+            else:
+                empty_state("NO CAMPAIGNS YET — LAUNCH ONE ABOVE")
+        except Exception as e:
+            st.error(f"Could not load campaigns: {e}")
+
+    with tab_queue:
+        section_header("Approval Queue", "Review discovered leads and approve for outreach")
+
+        try:
+            campaigns = db().list_campaigns(status="pending_approval")
+            if not campaigns:
+                all_campaigns = db().list_campaigns()
+                campaigns = all_campaigns
+
+            if not campaigns:
+                empty_state("NO CAMPAIGNS YET — LAUNCH A DISCOVERY CAMPAIGN FIRST")
+            else:
+                campaign_options = {
+                    f"{c.business_type} @ {c.geographic_center} ({c.discovered_count} found)": c
+                    for c in campaigns
+                }
+                selected_label = st.selectbox("Select Campaign", list(campaign_options.keys()))
+                selected_campaign = campaign_options.get(selected_label)
+
+                if selected_campaign:
+                    businesses = db().list_discovered_businesses(selected_campaign.id)
+
+                    if not businesses:
+                        empty_state("NO BUSINESSES DISCOVERED YET — CHECK BACK SOON")
+                    else:
+                        st.markdown(
+                            f'<p class="label" style="margin-bottom:16px;">'
+                            f'{len(businesses)} BUSINESSES DISCOVERED — SELECT TO APPROVE</p>',
+                            unsafe_allow_html=True,
+                        )
+
+                        biz_data = []
+                        for b in businesses:
+                            biz_data.append({
+                                "id": b.id,
+                                "Approve": b.approved,
+                                "Business": b.business_name,
+                                "Address": b.address or "—",
+                                "Phone": b.phone or "—",
+                                "Email": b.email or "—",
+                                "Channel": b.channel or "none",
+                                "Rating": b.rating or "—",
+                            })
+
+                        df = pd.DataFrame(biz_data)
+                        edited_df = st.data_editor(
+                            df.drop(columns=["id"]),
+                            column_config={
+                                "Approve": st.column_config.CheckboxColumn("Approve", default=False),
+                                "Channel": st.column_config.SelectboxColumn(
+                                    "Channel",
+                                    options=["email", "sms", "both", "none"],
+                                ),
+                            },
+                            use_container_width=True,
+                            hide_index=True,
+                            num_rows="fixed",
+                        )
+
+                        col_a, col_b = st.columns(2)
+                        if col_a.button("SAVE APPROVALS", type="primary"):
+                            try:
+                                approved_indices = edited_df[edited_df["Approve"] == True].index.tolist()
+                                for i, row in edited_df.iterrows():
+                                    biz_id = df.iloc[i]["id"]
+                                    db().update_discovered_business(biz_id, {
+                                        "approved": bool(row["Approve"]),
+                                        "channel": row["Channel"],
+                                    })
+                                st.success(f"[SAVED] {len(approved_indices)} businesses approved for outreach")
+                            except Exception as e:
+                                st.error(f"Save failed: {e}")
+
+                        if col_b.button("SEND APPROVED TO OUTREACH"):
+                            try:
+                                approved_bizs = [
+                                    b for b, row in zip(businesses, edited_df.itertuples())
+                                    if row.Approve
+                                ]
+                                email_count = 0
+                                sms_count = 0
+                                from database.models import Contact, SMSMessage
+                                from agents.sms_drafter import SMSDrafterAgent
+                                from agents.email_drafter import EmailDrafterAgent
+                                from database.models import ResearchResult, Lead
+
+                                sms_agent = SMSDrafterAgent()
+                                email_agent = EmailDrafterAgent()
+
+                                for biz in approved_bizs:
+                                    channel = biz.channel or "none"
+                                    if channel == "none":
+                                        continue
+
+                                    lead = db().create_lead(Lead(
+                                        company_name=biz.business_name,
+                                        vertical=selected_campaign.business_type
+                                            if selected_campaign.business_type in ["restaurant", "vet", "dermatologist"]
+                                            else "restaurant",
+                                        geography=selected_campaign.geographic_center,
+                                        website=biz.website,
+                                        status="new",
+                                    ))
+                                    contact = db().create_contact(Contact(
+                                        lead_id=lead.id,
+                                        name=biz.business_name,
+                                        role="Owner",
+                                        email=biz.email if channel in ("email", "both") else None,
+                                        phone=biz.phone if channel in ("sms", "both") else None,
+                                    ))
+
+                                    if channel in ("email", "both") and biz.email:
+                                        research = ResearchResult(
+                                            company_name=biz.business_name,
+                                            vertical=lead.vertical,
+                                            insights=f"Local {lead.vertical} in {selected_campaign.geographic_center}",
+                                        )
+                                        draft = email_agent.draft_email(lead, contact, research)
+                                        db().create_email(draft)
+                                        db().update_lead_status(lead.id, "drafted")
+                                        email_count += 1
+
+                                    if channel in ("sms", "both") and biz.phone:
+                                        msg = sms_agent.draft_sms(
+                                            biz.business_name, lead.vertical, biz.phone
+                                        )
+                                        if msg:
+                                            db().create_sms(SMSMessage(
+                                                contact_id=contact.id,
+                                                phone_number=biz.phone,
+                                                message_body=msg,
+                                                status="draft",
+                                            ))
+                                            sms_count += 1
+
+                                st.success(
+                                    f"[QUEUED] {email_count} emails drafted, {sms_count} SMS drafted. "
+                                    f"Celery will send them respecting daily caps."
+                                )
+                                db().update_campaign(selected_campaign.id, {"status": "approved"})
+                            except Exception as e:
+                                st.error(f"Outreach queue failed: {e}")
+                                logger.exception("Approval queue outreach error")
+
+        except Exception as e:
+            st.error(f"Approval queue error: {e}")
+            logger.exception("Approval queue error")
 
 
 elif page == "Pipeline":
@@ -703,6 +916,27 @@ elif page == "Analytics":
                         f"{int(100*counts.get('meeting_set',0) / max(total_sent,1))}%",
                         color="success",
                     )
+
+            # ── SMS Metrics (V2) ──────────────────────────────────────────
+            try:
+                sms_sent_today = db().count_sms_sent_today()
+                campaigns = db().list_campaigns()
+                total_discovered = sum(c.discovered_count for c in campaigns)
+
+                section_header("SMS & Discovery Metrics")
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    metric_card("SMS SENT TODAY", str(sms_sent_today),
+                                color="warning" if sms_sent_today >= 45 else None)
+                with col2:
+                    metric_card("SMS BUDGET LEFT", f"{max(0, 50 - sms_sent_today)}/50")
+                with col3:
+                    metric_card("CAMPAIGNS RUN", str(len(campaigns)))
+                with col4:
+                    metric_card("BUSINESSES FOUND", str(total_discovered))
+            except Exception:
+                pass
+
     except Exception as e:
         st.error(f"Analytics error: {e}")
         logger.exception("Analytics error")
