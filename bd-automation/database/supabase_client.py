@@ -443,3 +443,88 @@ class SupabaseDB:
             meetings_booked=meetings_today.count or 0,
             emails_remaining_today=max(0, 50 - emails_sent_today),
         )
+
+    # ── Research Enhancements ──────────────────────────────────────────────────
+
+    def save_tiered_research(self, lead_id: str, tiers_run: list, results: dict) -> dict:
+        """Persist tiered research results. Returns the inserted row."""
+        import json
+        data = {
+            "lead_id": lead_id,
+            "tiers_run": tiers_run,
+            "results": results,
+        }
+        result = self.client.table("tiered_research_results").insert(data).execute()
+        return result.data[0] if result.data else {}
+
+    def get_tiered_research(self, lead_id: str) -> Optional[dict]:
+        """Get the latest tiered research result for a lead."""
+        result = (
+            self.client.table("tiered_research_results")
+            .select("*")
+            .eq("lead_id", lead_id)
+            .order("executed_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+        return result.data[0] if result.data else None
+
+    def save_competitor_analysis(self, lead_id: str, analysis: dict) -> dict:
+        """Persist competitor analysis results."""
+        import json
+        data = {
+            "lead_id": lead_id,
+            "config": analysis.get("config", {}),
+            "competitors": analysis.get("competitors", []),
+            "capability_gaps": analysis.get("capability_gaps", []),
+            "outreach_points": analysis.get("outreach_talking_points", []),
+        }
+        result = self.client.table("competitor_analyses").insert(data).execute()
+        return result.data[0] if result.data else {}
+
+    def get_competitor_analysis(self, lead_id: str) -> Optional[dict]:
+        """Get the latest competitor analysis for a lead."""
+        result = (
+            self.client.table("competitor_analyses")
+            .select("*")
+            .eq("lead_id", lead_id)
+            .order("generated_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+        return result.data[0] if result.data else None
+
+    def save_pain_point_analysis(self, lead_id: str, analysis: dict) -> dict:
+        """Persist pain point analysis results."""
+        data = {
+            "lead_id": lead_id,
+            "reviews_analyzed": analysis.get("total_reviews_analyzed", 0),
+            "pain_points": analysis.get("pain_points", []),
+            "solution_mapping": analysis.get("solution_mapping", []),
+            "outreach_intelligence": analysis.get("outreach_intelligence", {}),
+        }
+        result = self.client.table("pain_point_analyses").insert(data).execute()
+        return result.data[0] if result.data else {}
+
+    def get_pain_point_analysis(self, lead_id: str) -> Optional[dict]:
+        """Get the latest pain point analysis for a lead."""
+        result = (
+            self.client.table("pain_point_analyses")
+            .select("*")
+            .eq("lead_id", lead_id)
+            .order("generated_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+        return result.data[0] if result.data else None
+
+    def save_signal_score(self, lead_id: str, score_result: dict) -> None:
+        """Update lead_scores.signal_score for a lead."""
+        try:
+            self.client.table("lead_scores").upsert(
+                {"lead_id": lead_id, "signal_score": score_result.get("priority_score", 0)},
+                on_conflict="lead_id",
+            ).execute()
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(f"save_signal_score failed: {e}")

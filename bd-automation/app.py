@@ -957,99 +957,427 @@ elif page == "Research Insights":
             if selected_lead:
                 st.markdown("<hr>", unsafe_allow_html=True)
 
-                # Priority score row
-                from agents.automation_rules import AutomationRules
-                rules = AutomationRules(db=db())
-                components = rules.calculate_score_components(selected_lead)
-
                 lead_card_header(
                     selected_lead.company_name,
                     selected_lead.status,
                     selected_lead.created_at.strftime("%m/%d/%y") if selected_lead.created_at else "",
                 )
 
-                st.markdown('<p class="label" style="margin:24px 0 12px 0;">PRIORITY SCORE</p>',
-                            unsafe_allow_html=True)
-                col1, col2, col3, col4 = st.columns(4)
-                with col1:
-                    metric_card("TOTAL", f"{components['total']}/100",
-                                color="success" if components["total"] >= 60 else "warning" if components["total"] >= 40 else "error")
-                with col2:
-                    metric_card("WEBSITE", f"{components['website']}/20")
-                with col3:
-                    metric_card("CONTACT", f"{components['contact']}/15")
-                with col4:
-                    metric_card("RESEARCH", f"{components['research']}/30")
+                # ── Tabs ─────────────────────────────────────────────────────
+                tab_overview, tab_deep, tab_signals, tab_competitors, tab_pain = st.tabs([
+                    "Overview", "Deep Research", "Signal Score", "Competitors", "Pain Points"
+                ])
 
-                st.markdown("<hr>", unsafe_allow_html=True)
+                # ── Overview Tab ─────────────────────────────────────────────
+                with tab_overview:
+                    from agents.automation_rules import AutomationRules
+                    rules = AutomationRules(db=db())
+                    components = rules.calculate_score_components(selected_lead)
 
-                col_left, col_right = st.columns(2)
-
-                with col_left:
-                    st.markdown('<p class="label" style="margin-bottom:12px;">DISCOVERED CONTACTS</p>',
+                    st.markdown('<p class="label" style="margin:24px 0 12px 0;">PRIORITY SCORE</p>',
                                 unsafe_allow_html=True)
-                    contacts = db().get_contacts_for_lead(selected_lead.id)
-                    if contacts:
-                        for c in contacts:
-                            email_status = ""
-                            logs = db().get_research_logs_for_lead(selected_lead.id)
-                            if logs and logs[0].email_verification_status:
-                                status_colors = {"verified": "success", "unverified": "error",
-                                                 "not_found": "error", "skipped": "secondary"}
-                                ev = logs[0].email_verification_status
-                                email_status = f'<span class="text-{status_colors.get(ev, "secondary")}" style="font-size:11px;font-family:var(--font-mono);margin-left:8px;">{ev.upper()}</span>'
-                            st.markdown(f"""
-                            <div class="lead-card" style="margin-bottom:8px;">
-                                <div style="font-size:15px;font-weight:500;color:var(--text-display);">{c.name}</div>
-                                <div class="label" style="margin-top:4px;">{c.role or "Unknown role"}</div>
-                                <div style="margin-top:8px;font-size:14px;color:var(--text-primary);">
-                                    {c.email or "No email"}{email_status}
+                    col1, col2, col3, col4 = st.columns(4)
+                    with col1:
+                        metric_card("TOTAL", f"{components['total']}/100",
+                                    color="success" if components["total"] >= 60 else "warning" if components["total"] >= 40 else "error")
+                    with col2:
+                        metric_card("WEBSITE", f"{components['website']}/20")
+                    with col3:
+                        metric_card("CONTACT", f"{components['contact']}/15")
+                    with col4:
+                        metric_card("RESEARCH", f"{components['research']}/30")
+
+                    st.markdown("<hr>", unsafe_allow_html=True)
+
+                    col_left, col_right = st.columns(2)
+
+                    with col_left:
+                        st.markdown('<p class="label" style="margin-bottom:12px;">DISCOVERED CONTACTS</p>',
+                                    unsafe_allow_html=True)
+                        contacts = db().get_contacts_for_lead(selected_lead.id)
+                        if contacts:
+                            for c in contacts:
+                                email_status = ""
+                                logs = db().get_research_logs_for_lead(selected_lead.id)
+                                if logs and logs[0].email_verification_status:
+                                    status_colors = {"verified": "success", "unverified": "error",
+                                                     "not_found": "error", "skipped": "secondary"}
+                                    ev = logs[0].email_verification_status
+                                    email_status = f'<span class="text-{status_colors.get(ev, "secondary")}" style="font-size:11px;font-family:var(--font-mono);margin-left:8px;">{ev.upper()}</span>'
+                                st.markdown(f"""
+                                <div class="lead-card" style="margin-bottom:8px;">
+                                    <div style="font-size:15px;font-weight:500;color:var(--text-display);">{c.name}</div>
+                                    <div class="label" style="margin-top:4px;">{c.role or "Unknown role"}</div>
+                                    <div style="margin-top:8px;font-size:14px;color:var(--text-primary);">
+                                        {c.email or "No email"}{email_status}
+                                    </div>
+                                    {"<div style='font-size:14px;color:var(--text-secondary);'>" + c.phone + "</div>" if c.phone else ""}
                                 </div>
-                                {"<div style='font-size:14px;color:var(--text-secondary);'>" + c.phone + "</div>" if c.phone else ""}
+                                """, unsafe_allow_html=True)
+                        else:
+                            empty_state("NO CONTACTS FOUND")
+
+                        st.markdown("<div style='margin-top:16px;'></div>", unsafe_allow_html=True)
+                        if st.button("Re-run Basic Research", type="primary"):
+                            with st.spinner("[RESEARCHING...]"):
+                                try:
+                                    from agents.lead_research import LeadResearchAgent
+                                    agent = LeadResearchAgent(db=db())
+                                    result = agent.research_lead(selected_lead)
+                                    db().update_lead_status(selected_lead.id, "researching")
+                                    st.success(f"[DONE] Research updated for {selected_lead.company_name}")
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"Research failed: {e}")
+
+                    with col_right:
+                        st.markdown('<p class="label" style="margin-bottom:12px;">RESEARCH HISTORY</p>',
+                                    unsafe_allow_html=True)
+                        logs = db().get_research_logs_for_lead(selected_lead.id)
+                        if logs:
+                            for log in logs:
+                                ts = log.created_at.strftime("%m/%d %H:%M") if log.created_at else "—"
+                                ev_color = {"verified": "success", "unverified": "error",
+                                            "not_found": "error", "skipped": "secondary"}.get(
+                                    log.email_verification_status or "skipped", "secondary")
+                                confidence_html = f'<div style="margin-top:4px;"><span class="label">HUNTER CONFIDENCE</span> <span class="text-primary">{log.hunter_confidence}%</span></div>' if log.hunter_confidence else ""
+                                duration_html = f'<div style="margin-top:4px;"><span class="label">SCRAPE</span> <span class="text-secondary">{log.scrape_duration_ms}ms</span></div>' if log.scrape_duration_ms else ""
+                                insights_html = f'<div style="margin-top:8px;font-size:13px;color:var(--text-secondary);line-height:1.5;">{(log.insights or "")[:200]}{"…" if log.insights and len(log.insights) > 200 else ""}</div>' if log.insights else ""
+                                st.markdown(f"""
+                                <div style="background:var(--surface);border:1px solid var(--border-visible);border-radius:8px;padding:16px;margin-bottom:8px;">
+                                    <div style="display:flex;justify-content:space-between;align-items:center;">
+                                        <span class="label">{ts}</span>
+                                        <span class="text-{ev_color}" style="font-family:var(--font-mono);font-size:11px;letter-spacing:0.06em;">{(log.email_verification_status or "skipped").upper()}</span>
+                                    </div>
+                                    {confidence_html}
+                                    {duration_html}
+                                    {insights_html}
+                                </div>
+                                """, unsafe_allow_html=True)
+                        else:
+                            empty_state("NO RESEARCH LOGS — RUN RESEARCH FIRST")
+
+                # ── Deep Research Tab ─────────────────────────────────────────
+                with tab_deep:
+                    st.markdown('<p class="label" style="margin:16px 0 12px 0;">RUN DEEP RESEARCH</p>',
+                                unsafe_allow_html=True)
+
+                    col_opts, col_adv = st.columns(2)
+                    with col_opts:
+                        st.markdown('<p class="label" style="font-size:11px;margin-bottom:8px;">TIERS TO RUN</p>',
+                                    unsafe_allow_html=True)
+                        run_t1 = st.checkbox("Tier 1 — Basic Info & Reviews", value=True)
+                        run_t2 = st.checkbox("Tier 2 — Digital Presence & Website", value=True)
+                        run_t3 = st.checkbox("Tier 3 — Tech Stack Detection", value=False)
+                        run_t4 = st.checkbox("Tier 4 — Decision Maker Contacts", value=False)
+
+                    with col_adv:
+                        st.markdown('<p class="label" style="font-size:11px;margin-bottom:8px;">ADDITIONAL ANALYSIS</p>',
+                                    unsafe_allow_html=True)
+                        run_signals = st.checkbox("Signal Scoring", value=True)
+                        run_competitors = st.checkbox("Competitor Gap Analysis", value=False)
+                        run_pain = st.checkbox("Pain Point Mining (requires Yelp)", value=False)
+
+                    tiers_selected = []
+                    if run_t1:
+                        tiers_selected.append(1)
+                    if run_t2:
+                        tiers_selected.append(2)
+                    if run_t3:
+                        tiers_selected.append(3)
+                    if run_t4:
+                        tiers_selected.append(4)
+
+                    if st.button("Run Deep Research", type="primary"):
+                        if not tiers_selected:
+                            st.warning("Select at least one tier to run.")
+                        else:
+                            with st.spinner(f"[RUNNING TIERS {tiers_selected}...]"):
+                                try:
+                                    from agents.research_orchestrator import ResearchOrchestrator
+                                    orch = ResearchOrchestrator(db=db())
+                                    result = orch.run(
+                                        lead=selected_lead,
+                                        tiers=tiers_selected,
+                                        run_signals=run_signals,
+                                        run_competitor=run_competitors,
+                                        run_pain_points=run_pain,
+                                    )
+                                    st.success(f"[DONE] Deep research complete for {selected_lead.company_name}")
+                                    st.session_state[f"deep_result_{selected_lead.id}"] = result
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"Deep research failed: {e}")
+                                    logger.exception("Deep research failed")
+
+                    # Show cached / persisted tiered result
+                    cached = st.session_state.get(f"deep_result_{selected_lead.id}")
+                    tier_data = None
+                    try:
+                        tier_data = db().get_tiered_research(selected_lead.id)
+                    except Exception:
+                        pass
+
+                    display_result = cached or ({"tier_results": tier_data} if tier_data else None)
+
+                    if display_result:
+                        tier_results = display_result.get("tier_results", display_result)
+                        st.markdown("<hr>", unsafe_allow_html=True)
+                        st.markdown('<p class="label" style="margin-bottom:12px;">TIER RESULTS</p>',
+                                    unsafe_allow_html=True)
+
+                        for tier_key in ["tier_1", "tier_2", "tier_3", "tier_4"]:
+                            tier = tier_results.get(tier_key) if isinstance(tier_results, dict) else None
+                            if not tier:
+                                continue
+                            tier_num = tier_key.replace("tier_", "")
+                            tier_names = {"1": "Basic Info & Reviews", "2": "Digital Presence",
+                                          "3": "Tech Stack", "4": "Decision Makers"}
+                            status = tier.get("status", "unknown")
+                            status_color = "success" if status == "ok" else "error"
+                            with st.expander(f"Tier {tier_num} — {tier_names.get(tier_num, '')}  [{status.upper()}]"):
+                                data = tier.get("data", {})
+                                if isinstance(data, dict):
+                                    for k, v in data.items():
+                                        if isinstance(v, list):
+                                            if v:
+                                                st.markdown(f'<span class="label">{k.upper()}</span>', unsafe_allow_html=True)
+                                                for item in v[:5]:
+                                                    if isinstance(item, dict):
+                                                        st.json(item, expanded=False)
+                                                    else:
+                                                        st.markdown(f"• {item}")
+                                        elif isinstance(v, dict):
+                                            st.markdown(f'<span class="label">{k.upper()}</span>', unsafe_allow_html=True)
+                                            st.json(v, expanded=False)
+                                        elif v is not None:
+                                            label_value(k.upper().replace("_", " "), str(v))
+                                if tier.get("error"):
+                                    st.error(f"Error: {tier['error']}")
+                    else:
+                        st.markdown("<div style='margin-top:24px;'></div>", unsafe_allow_html=True)
+                        empty_state("NO DEEP RESEARCH DATA — RUN ABOVE TO START")
+
+                # ── Signal Score Tab ──────────────────────────────────────────
+                with tab_signals:
+                    score_data = None
+                    try:
+                        score_data = db().get_tiered_research(selected_lead.id)
+                    except Exception:
+                        pass
+
+                    cached_result = st.session_state.get(f"deep_result_{selected_lead.id}", {})
+                    signal_result = cached_result.get("signal_score") if cached_result else None
+
+                    if signal_result or score_data:
+                        if signal_result:
+                            priority = signal_result.get("priority_score", 0)
+                            qualification = signal_result.get("qualification", "not_qualified")
+                            signals = signal_result.get("signals_detected", [])
+                            recommendation = signal_result.get("recommendation", "")
+                            total_possible = signal_result.get("total_possible_points", 0)
+                            total_earned = signal_result.get("total_earned_points", 0)
+                        else:
+                            priority, qualification, signals, recommendation = 0, "not_qualified", [], ""
+                            total_possible, total_earned = 0, 0
+
+                        qual_colors = {
+                            "high_priority": "success", "medium_priority": "warning",
+                            "low_priority": "secondary", "not_qualified": "error"
+                        }
+                        qual_color = qual_colors.get(qualification, "secondary")
+
+                        st.markdown('<p class="label" style="margin:16px 0 12px 0;">SIGNAL SCORE</p>',
+                                    unsafe_allow_html=True)
+                        sc1, sc2, sc3 = st.columns(3)
+                        with sc1:
+                            metric_card("PRIORITY SCORE", f"{priority}/100",
+                                        color="success" if priority >= 70 else "warning" if priority >= 45 else "error")
+                        with sc2:
+                            metric_card("QUALIFICATION", qualification.upper().replace("_", " "),
+                                        color=qual_color)
+                        with sc3:
+                            metric_card("POINTS EARNED", f"{total_earned}/{total_possible}")
+
+                        if recommendation:
+                            st.markdown(f"""
+                            <div style="background:var(--surface);border:1px solid var(--border-visible);border-radius:8px;padding:16px;margin:16px 0;">
+                                <span class="label">RECOMMENDATION</span>
+                                <p style="margin-top:8px;font-size:14px;color:var(--text-primary);line-height:1.6;">{recommendation}</p>
                             </div>
                             """, unsafe_allow_html=True)
-                    else:
-                        empty_state("NO CONTACTS FOUND")
 
-                    st.markdown("<div style='margin-top:16px;'></div>", unsafe_allow_html=True)
-                    if st.button("Re-run Research", type="primary"):
-                        with st.spinner("[RESEARCHING...]"):
-                            try:
-                                from agents.lead_research import LeadResearchAgent
-                                agent = LeadResearchAgent(db=db())
-                                result = agent.research_lead(selected_lead)
-                                db().update_lead_status(selected_lead.id, "researching")
-                                st.success(f"[DONE] Research updated for {selected_lead.company_name}")
-                                st.rerun()
-                            except Exception as e:
-                                st.error(f"Research failed: {e}")
-
-                with col_right:
-                    st.markdown('<p class="label" style="margin-bottom:12px;">RESEARCH HISTORY</p>',
-                                unsafe_allow_html=True)
-                    logs = db().get_research_logs_for_lead(selected_lead.id)
-                    if logs:
-                        for log in logs:
-                            ts = log.created_at.strftime("%m/%d %H:%M") if log.created_at else "—"
-                            ev_color = {"verified": "success", "unverified": "error",
-                                        "not_found": "error", "skipped": "secondary"}.get(
-                                log.email_verification_status or "skipped", "secondary")
-                            confidence_html = f'<div style="margin-top:4px;"><span class="label">HUNTER CONFIDENCE</span> <span class="text-primary">{log.hunter_confidence}%</span></div>' if log.hunter_confidence else ""
-                            duration_html = f'<div style="margin-top:4px;"><span class="label">SCRAPE</span> <span class="text-secondary">{log.scrape_duration_ms}ms</span></div>' if log.scrape_duration_ms else ""
-                            insights_html = f'<div style="margin-top:8px;font-size:13px;color:var(--text-secondary);line-height:1.5;">{(log.insights or "")[:200]}{"…" if log.insights and len(log.insights) > 200 else ""}</div>' if log.insights else ""
-                            st.markdown(f"""
-                            <div style="background:var(--surface);border:1px solid var(--border-visible);border-radius:8px;padding:16px;margin-bottom:8px;">
-                                <div style="display:flex;justify-content:space-between;align-items:center;">
-                                    <span class="label">{ts}</span>
-                                    <span class="text-{ev_color}" style="font-family:var(--font-mono);font-size:11px;letter-spacing:0.06em;">{(log.email_verification_status or "skipped").upper()}</span>
+                        if signals:
+                            st.markdown('<p class="label" style="margin:16px 0 8px 0;">SIGNALS DETECTED</p>',
+                                        unsafe_allow_html=True)
+                            for sig in signals:
+                                detected = sig.get("detected", False)
+                                dot_color = "var(--success)" if detected else "var(--border-visible)"
+                                points = sig.get("points_earned", 0)
+                                weight = sig.get("weight", 0)
+                                st.markdown(f"""
+                                <div style="display:flex;align-items:center;padding:10px 0;border-bottom:1px solid var(--border-subtle);">
+                                    <div style="width:10px;height:10px;border-radius:50%;background:{dot_color};margin-right:12px;flex-shrink:0;"></div>
+                                    <div style="flex:1;">
+                                        <span style="font-size:14px;color:var(--text-primary);">{sig.get('name', '')}</span>
+                                        <span class="label" style="margin-left:8px;font-size:11px;">{sig.get('category', '').upper()}</span>
+                                    </div>
+                                    <div style="font-family:var(--font-mono);font-size:13px;color:{'var(--success)' if detected else 'var(--text-secondary)'};">
+                                        {points}/{weight}pts
+                                    </div>
                                 </div>
-                                {confidence_html}
-                                {duration_html}
-                                {insights_html}
-                            </div>
-                            """, unsafe_allow_html=True)
+                                """, unsafe_allow_html=True)
                     else:
-                        empty_state("NO RESEARCH LOGS — RUN RESEARCH FIRST")
+                        empty_state("NO SIGNAL DATA — RUN DEEP RESEARCH WITH SIGNAL SCORING ENABLED")
+
+                # ── Competitors Tab ───────────────────────────────────────────
+                with tab_competitors:
+                    comp_data = None
+                    try:
+                        comp_data = db().get_competitor_analysis(selected_lead.id)
+                    except Exception:
+                        pass
+
+                    cached_result = st.session_state.get(f"deep_result_{selected_lead.id}", {})
+                    comp_result = cached_result.get("competitor_analysis") if cached_result else None
+                    display_comp = comp_result or comp_data
+
+                    if display_comp:
+                        competitors = display_comp.get("competitors", [])
+                        gaps = display_comp.get("capability_gaps", [])
+                        talking_points = display_comp.get("outreach_talking_points", [])
+
+                        st.markdown('<p class="label" style="margin:16px 0 12px 0;">NEARBY COMPETITORS</p>',
+                                    unsafe_allow_html=True)
+                        if competitors:
+                            comp_rows = []
+                            for c in competitors:
+                                comp_rows.append({
+                                    "Name": c.get("name", ""),
+                                    "Rating": c.get("rating", "—"),
+                                    "Address": c.get("address", "—"),
+                                    "Website": c.get("website", "—"),
+                                })
+                            st.dataframe(pd.DataFrame(comp_rows), use_container_width=True, hide_index=True)
+                        else:
+                            st.markdown('<p style="color:var(--text-secondary);font-size:14px;">No competitors found nearby.</p>', unsafe_allow_html=True)
+
+                        if gaps:
+                            st.markdown('<p class="label" style="margin:20px 0 12px 0;">CAPABILITY GAPS</p>',
+                                        unsafe_allow_html=True)
+                            sev_colors = {"critical": "error", "high": "error",
+                                          "medium": "warning", "low": "secondary"}
+                            for gap in gaps:
+                                sev = gap.get("severity", "low")
+                                cap = gap.get("capability", "").replace("_", " ").title()
+                                pct = int(gap.get("competitors_with_pct", 0) * 100)
+                                total = gap.get("total_competitors", 0)
+                                c_with = gap.get("competitors_with", 0)
+                                st.markdown(f"""
+                                <div style="display:flex;align-items:center;padding:10px 0;border-bottom:1px solid var(--border-subtle);">
+                                    <div style="flex:1;">
+                                        <span style="font-size:14px;color:var(--text-primary);">{cap}</span>
+                                    </div>
+                                    <div style="margin-right:24px;font-size:13px;color:var(--text-secondary);">
+                                        {c_with}/{total} competitors have it ({pct}%)
+                                    </div>
+                                    <span class="text-{sev_colors.get(sev, 'secondary')}" style="font-family:var(--font-mono);font-size:11px;letter-spacing:0.08em;">{sev.upper()}</span>
+                                </div>
+                                """, unsafe_allow_html=True)
+
+                        if talking_points:
+                            st.markdown('<p class="label" style="margin:20px 0 12px 0;">OUTREACH TALKING POINTS</p>',
+                                        unsafe_allow_html=True)
+                            for i, pt in enumerate(talking_points, 1):
+                                st.markdown(f"""
+                                <div style="background:var(--surface);border:1px solid var(--border-visible);border-radius:8px;padding:14px 16px;margin-bottom:8px;">
+                                    <span style="font-family:var(--font-mono);color:var(--text-secondary);font-size:11px;margin-right:8px;">{i:02d}</span>
+                                    <span style="font-size:14px;color:var(--text-primary);">{pt}</span>
+                                </div>
+                                """, unsafe_allow_html=True)
+                    else:
+                        empty_state("NO COMPETITOR DATA — RUN DEEP RESEARCH WITH COMPETITOR ANALYSIS ENABLED")
+
+                # ── Pain Points Tab ───────────────────────────────────────────
+                with tab_pain:
+                    pp_data = None
+                    try:
+                        pp_data = db().get_pain_point_analysis(selected_lead.id)
+                    except Exception:
+                        pass
+
+                    cached_result = st.session_state.get(f"deep_result_{selected_lead.id}", {})
+                    pp_result = cached_result.get("pain_point_analysis") if cached_result else None
+                    display_pp = pp_result or pp_data
+
+                    if display_pp:
+                        pain_points = display_pp.get("pain_points", [])
+                        solution_mapping = display_pp.get("solution_mapping", [])
+                        outreach_intel = display_pp.get("outreach_intelligence", {})
+                        total_reviews = display_pp.get("total_reviews_analyzed", 0)
+
+                        st.markdown(f'<p class="label" style="margin:16px 0 4px 0;">PAIN POINTS FROM {total_reviews} REVIEWS</p>',
+                                    unsafe_allow_html=True)
+
+                        sev_colors = {"high": "error", "medium": "warning", "low": "secondary"}
+
+                        if pain_points:
+                            for pp in pain_points:
+                                sev = pp.get("severity", "low")
+                                quotes = pp.get("example_quotes", [])
+                                quote_html = ""
+                                if quotes:
+                                    quote_html = f'<div style="margin-top:10px;font-size:13px;color:var(--text-secondary);font-style:italic;line-height:1.5;">"{quotes[0]}"</div>'
+                                st.markdown(f"""
+                                <div style="background:var(--surface);border:1px solid var(--border-visible);border-radius:8px;padding:16px;margin-bottom:10px;">
+                                    <div style="display:flex;justify-content:space-between;align-items:center;">
+                                        <span style="font-size:15px;font-weight:500;color:var(--text-display);">{pp.get('name', '')}</span>
+                                        <div>
+                                            <span class="text-{sev_colors.get(sev, 'secondary')}" style="font-family:var(--font-mono);font-size:11px;">{sev.upper()}</span>
+                                            <span style="font-size:13px;color:var(--text-secondary);margin-left:12px;">{pp.get('mention_count', 0)} mentions</span>
+                                        </div>
+                                    </div>
+                                    {quote_html}
+                                </div>
+                                """, unsafe_allow_html=True)
+                        else:
+                            st.markdown('<p style="color:var(--text-secondary);font-size:14px;">No significant pain points detected.</p>', unsafe_allow_html=True)
+
+                        if solution_mapping:
+                            st.markdown('<p class="label" style="margin:20px 0 12px 0;">SOLUTION MAPPING</p>',
+                                        unsafe_allow_html=True)
+                            rows = [{"Pain Point": s.get("pain_point", ""), "Solution": s.get("solution", ""),
+                                     "Severity": s.get("severity", ""), "Mentions": s.get("mention_count", 0)}
+                                    for s in solution_mapping]
+                            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+                        if outreach_intel:
+                            st.markdown('<p class="label" style="margin:20px 0 12px 0;">OUTREACH INTELLIGENCE</p>',
+                                        unsafe_allow_html=True)
+                            opening = outreach_intel.get("best_opening_line", "")
+                            urgency = outreach_intel.get("urgency_angle", "")
+                            proof_points = outreach_intel.get("proof_points", [])
+
+                            if opening:
+                                st.markdown(f"""
+                                <div style="background:var(--surface);border:1px solid var(--border-visible);border-radius:8px;padding:16px;margin-bottom:10px;">
+                                    <span class="label" style="font-size:11px;">OPENING LINE</span>
+                                    <p style="margin-top:8px;font-size:15px;color:var(--text-display);line-height:1.5;">{opening}</p>
+                                </div>
+                                """, unsafe_allow_html=True)
+                            if urgency:
+                                st.markdown(f"""
+                                <div style="background:var(--surface);border:1px solid var(--border-visible);border-radius:8px;padding:16px;margin-bottom:10px;">
+                                    <span class="label" style="font-size:11px;">URGENCY ANGLE</span>
+                                    <p style="margin-top:8px;font-size:14px;color:var(--text-primary);line-height:1.5;">{urgency}</p>
+                                </div>
+                                """, unsafe_allow_html=True)
+                            if proof_points:
+                                st.markdown('<span class="label" style="font-size:11px;">PROOF POINTS</span>', unsafe_allow_html=True)
+                                for pt in proof_points:
+                                    st.markdown(f'<div style="padding:6px 0;font-size:14px;color:var(--text-primary);">• {pt}</div>', unsafe_allow_html=True)
+                    else:
+                        empty_state("NO PAIN POINT DATA — RUN DEEP RESEARCH WITH PAIN POINT MINING ENABLED")
 
     except Exception as e:
         st.error(f"Research Insights error: {e}")
