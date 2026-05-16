@@ -3,6 +3,7 @@ import logging
 import json
 import re
 from urllib.parse import urlparse
+from typing import Optional
 from database.models import Lead, Contact, ResearchResult, ResearchLog, LeadScore
 from integrations import LLMRouter, FirecrawlClient, HunterClient
 
@@ -222,3 +223,267 @@ class LeadResearchAgent:
             except Exception as e:
                 logger.error(f"Research failed for {lead.company_name}: {e}")
         return results
+
+
+class TieredResearchService:
+    """4-tier research pipeline for leads."""
+
+    TIERS = {
+        1: "Basic Info (Google Maps + Yelp)",
+        2: "Digital Presence (Website + Reviews)",
+        3: "Tech Stack (Firecrawl analysis)",
+        4: "Decision Maker (Hunter.io)",
+    }
+
+    def __init__(self, db=None):
+        self.llm = LLMRouter()
+        self.scraper = FirecrawlClient()
+        self.hunter = HunterClient()
+        self._db = db
+        self._yelp = None
+        self._gmaps = None
+
+    @property
+    def yelp(self):
+        """Lazily initialise YelpClient so missing YELP_API_KEY doesn't crash."""
+        if self._yelp is None:
+            from integrations.yelp_client import YelpClient
+            self._yelp = YelpClient()
+        return self._yelp
+
+    @property
+    def gmaps(self):
+        """Lazily initialise GoogleMapsClient so missing key doesn't crash."""
+        if self._gmaps is None:
+            from integrations.gmaps_client import GoogleMapsClient
+            self._gmaps = GoogleMapsClient()
+        return self._gmaps
+
+    def _get_db(self):
+        if self._db is None:
+            from database.supabase_client import SupabaseDB
+            self._db = SupabaseDB()
+        return self._db
+
+    def run(self, lead: Lead, tiers: Optional[list] = None) -> dict:
+        """Run specified tiers (default [1,2]) and return results dict."""
+        if tiers is None:
+            tiers = [1, 2]
+        results = {}
+        for tier in sorted(tiers):
+            try:
+                if tier == 1:
+                    results["tier_1"] = self._tier1(lead)
+                elif tier == 2:
+                    results["tier_2"] = self._tier2(lead)
+                elif tier == 3:
+                    results["tier_3"] = self._tier3(lead)
+                elif tier == 4:
+                    results["tier_4"] = self._tier4(lead)
+            except Exception as e:
+                logger.warning(f"Tier {tier} failed for {lead.company_name}: {e}")
+                results[f"tier_{tier}"] = {"status": "failed", "error": str(e)}
+        return results
+
+    def _tier1(self, lead: Lead) -> dict:
+        """Basic info from Google Maps + Yelp."""
+        data = {}
+        sources = []
+
+        # Google Maps lookup
+        try:
+            places = self.gmaps.search_businesses(
+                lead.company_name,
+                lead.geography or lead.company_name,
+                max_results=1,
+            )
+            if places:
+                place = places[0]
+                data["google_name"] = place.get("business_name")
+                data["google_address"] = place.get("address")
+                data["google_rating"] = place.get("rating")
+                data["google_phone"] = place.get("phone")
+                data["google_website"] = place.get("website")
+                sources.append("google_maps")
+        except Exception as e:
+            logger.warning(f"Tier 1 Google Maps failed for {lead.company_name}: {e}")
+
+        # Yelp lookup
+        try:
+            yelp_biz = self.yelp.search_business(
+                lead.company_name,
+                lead.geography or lead.company_name,
+            )
+            if yelp_biz:
+                data["yelp_id"] = yelp_biz.get("id")
+                data["yelp_name"] = yelp_biz.get("name")
+                data["yelp_rating"] = yelp_biz.get("rating")
+                data["yelp_review_count"] = yelp_biz.get("review_count")
+                data["yelp_phone"] = yelp_biz.get("phone")
+                data["yelp_url"] = yelp_biz.get("url")
+                data["yelp_categories"] = yelp_biz.get("categories", [])
+                sources.append("yelp")
+
+                # Fetch reviews while we have the ID
+                if yelp_biz.get("id"):
+                    try:
+                        reviews = self.yelp.get_reviews(yelp_biz["id"])
+                        data["yelp_reviews"] = reviews
+                    except Exception as rev_err:
+                        logger.warning(f"Yelp reviews fetch failed: {rev_err}")
+                        data["yelp_reviews"] = []
+        except Exception as e:
+            logger.warning(f"Tier 1 Yelp failed for {lead.company_name}: {e}")
+
+        return {"status": "completed", "data": data, "sources": sources}
+
+    def _tier2(self, lead: Lead) -> dict:
+        """Digital presence: scrape website for reviews + online presence signals."""
+        if not lead.website:
+            return {"status": "skipped", "reason": "no website", "data": {}, "sources": []}
+
+        try:
+            content = self.scraper.scrape(lead.website)
+        except Exception as e:
+            logger.warning(f"Tier 2 scrape failed for {lead.company_name}: {e}")
+            return {"status": "failed", "error": str(e), "data": {}, "sources": []}
+
+        content_lower = content.lower() if content else ""
+
+        ordering_keywords = ["order online", "order now", "doordash", "grubhub", "ubereats", "toast", "online ordering"]
+        reservation_keywords = ["reservation", "opentable", "resy", "book a table"]
+        booking_keywords = ["book appointment", "book online", "schedule online", "book now", "request appointment"]
+
+        has_online_ordering = any(kw in content_lower for kw in ordering_keywords)
+        has_reservation = any(kw in content_lower for kw in reservation_keywords)
+        has_booking = any(kw in content_lower for kw in booking_keywords)
+
+        # Social media presence detection
+        social_platforms = ["facebook.com", "instagram.com", "twitter.com", "linkedin.com", "tiktok.com"]
+        social_links = [p for p in social_platforms if p in content_lower]
+
+        data = {
+            "online_presence": {
+                "has_online_ordering": has_online_ordering,
+                "has_reservation": has_reservation,
+                "has_booking": has_booking,
+            },
+            "social_media": social_links,
+            "website_content_length": len(content),
+            "website_content": content[:3000] if content else "",
+        }
+
+        return {"status": "completed", "data": data, "sources": ["website_scrape"]}
+
+    def _tier3(self, lead: Lead) -> dict:
+        """Tech stack detection from website HTML inspection."""
+        if not lead.website:
+            return {"status": "skipped", "reason": "no website", "data": {}, "sources": []}
+
+        try:
+            content = self.scraper.scrape(lead.website)
+        except Exception as e:
+            logger.warning(f"Tier 3 scrape failed for {lead.company_name}: {e}")
+            return {"status": "failed", "error": str(e), "data": {}, "sources": []}
+
+        content_lower = content.lower() if content else ""
+
+        tech_signals = {
+            "cms": {
+                "wordpress": ["wordpress", "wp-content", "wp-includes"],
+                "shopify": ["shopify", "cdn.shopify"],
+                "wix": ["wix.com", "wixsite"],
+                "squarespace": ["squarespace"],
+                "webflow": ["webflow"],
+            },
+            "analytics": {
+                "google_analytics": ["google-analytics", "gtag(", "ga(", "googletagmanager"],
+                "hotjar": ["hotjar"],
+                "mixpanel": ["mixpanel"],
+            },
+            "marketing": {
+                "mailchimp": ["mailchimp", "list-manage.com"],
+                "klaviyo": ["klaviyo"],
+                "constant_contact": ["constant contact", "constantcontact"],
+                "hubspot": ["hubspot", "hs-scripts"],
+            },
+            "crm": {
+                "salesforce": ["salesforce", "pardot"],
+                "hubspot_crm": ["hubspot"],
+                "zoho": ["zoho"],
+            },
+            "booking_systems": {
+                "opentable": ["opentable"],
+                "resy": ["resy.com"],
+                "toast": ["toasttab", "pos.toasttab"],
+                "square": ["square.com", "squareup"],
+                "acuity": ["acuityscheduling"],
+                "calendly": ["calendly"],
+                "zocdoc": ["zocdoc"],
+                "vetstoria": ["vetstoria"],
+            },
+            "ecommerce": {
+                "stripe": ["stripe.com", "js.stripe"],
+                "paypal": ["paypal"],
+            },
+        }
+
+        detected = {}
+        for category, tools in tech_signals.items():
+            detected[category] = {}
+            for tool_name, keywords in tools.items():
+                detected[category][tool_name] = any(kw in content_lower for kw in keywords)
+
+        return {"status": "completed", "data": {"tech_stack": detected}, "sources": ["website_scrape"]}
+
+    def _tier4(self, lead: Lead) -> dict:
+        """Decision maker discovery via Hunter.io."""
+        if not lead.website:
+            return {"status": "skipped", "reason": "no website", "data": {}, "sources": []}
+
+        try:
+            domain = urlparse(lead.website).netloc.lstrip("www.")
+        except Exception:
+            domain = ""
+
+        if not domain:
+            return {"status": "skipped", "reason": "could not parse domain", "data": {}, "sources": []}
+
+        decision_makers = []
+        sources = []
+
+        try:
+            emails = self.hunter.domain_search(domain)
+            for entry in emails:
+                decision_makers.append({
+                    "email": entry.get("value"),
+                    "first_name": entry.get("first_name"),
+                    "last_name": entry.get("last_name"),
+                    "position": entry.get("position"),
+                    "confidence": entry.get("confidence", 0),
+                })
+            if emails:
+                sources.append("hunter_domain_search")
+        except Exception as e:
+            logger.warning(f"Tier 4 Hunter domain_search failed for {lead.company_name}: {e}")
+
+        if not decision_makers:
+            try:
+                result = self.hunter.find_email(domain, "", "")
+                if result.get("email"):
+                    decision_makers.append({
+                        "email": result["email"],
+                        "first_name": None,
+                        "last_name": None,
+                        "position": None,
+                        "confidence": result.get("confidence", 0),
+                    })
+                    sources.append("hunter_email_finder")
+            except Exception as e:
+                logger.warning(f"Tier 4 Hunter find_email failed for {lead.company_name}: {e}")
+
+        return {
+            "status": "completed",
+            "data": {"decision_makers": decision_makers, "domain": domain},
+            "sources": sources,
+        }

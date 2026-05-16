@@ -1,0 +1,22 @@
+{
+  "restaurant": [
+    "Hi {business_name}! We help restaurants fill more tables with targeted digital ads. Interested in a quick chat? Reply YES.",
+    "Following up on our note to {business_name}. We boost local foot traffic fast. Got 10 min this week? Reply YES.",
+    "Last check-in for {business_name} — we have an opening for one new restaurant partner. Reply YES to claim it."
+  ],
+  "vet": [
+    "Hi {business_name}! We help vet clinics attract more pet owners online. Worth a quick call? Reply YES.",
+    "Checking in with {business_name} — we specialize in growth for vet practices. Free 10-min call? Reply YES.",
+    "Final note to {business_name}: one vet clinic spot left in your area. Interested? Reply YES."
+  ],
+  "dermatologist": [
+    "Hi {business_name}! We help dermatology practices book more patients online. Quick call this week? Reply YES.",
+    "Following up with {business_name} — we fill appointment slots for derm practices. 10 min to chat? Reply YES.",
+    "Last reach-out to {business_name}: limited spots for new derm partners. Interested? Reply YES."
+  ],
+  "default": [
+    "Hi {business_name}! We help {vertical} businesses grow online. Worth a quick chat? Reply YES.",
+    "Following up with {business_name} — we drive real results for {vertical} businesses. 10 min this week? Reply YES.",
+    "Final note to {business_name}: one partner spot left. Interested in growing your {vertical} business? Reply YES."
+  ]
+}

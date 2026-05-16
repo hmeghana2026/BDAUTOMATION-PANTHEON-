@@ -3,7 +3,10 @@ import logging
 from typing import Optional
 from datetime import datetime, timedelta
 from supabase import create_client, Client
-from .models import Lead, Contact, Email, Meeting, DailyStats, ResearchLog, TaskLog, LeadScore
+from .models import (
+    Lead, Contact, Email, Meeting, DailyStats, ResearchLog, TaskLog, LeadScore,
+    DiscoveryCampaign, DiscoveredBusiness, SMSMessage,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -281,6 +284,135 @@ class SupabaseDB:
 
     # ── Analytics ──────────────────────────────────────────────────────
 
+    # ── V2: Discovery Campaigns ────────────────────────────────────────────
+
+    def create_campaign(self, campaign: DiscoveryCampaign) -> DiscoveryCampaign:
+        data = campaign.model_dump(exclude={"id", "created_at", "updated_at"})
+        result = self.client.table("discovery_campaigns").insert(data).execute()
+        return DiscoveryCampaign(**result.data[0])
+
+    def get_campaign(self, campaign_id: str) -> Optional[DiscoveryCampaign]:
+        result = self.client.table("discovery_campaigns").select("*").eq("id", campaign_id).execute()
+        if result.data:
+            return DiscoveryCampaign(**result.data[0])
+        return None
+
+    def update_campaign(self, campaign_id: str, updates: dict) -> DiscoveryCampaign:
+        result = (
+            self.client.table("discovery_campaigns")
+            .update(updates)
+            .eq("id", campaign_id)
+            .execute()
+        )
+        return DiscoveryCampaign(**result.data[0])
+
+    def list_campaigns(self, status: Optional[str] = None) -> list[DiscoveryCampaign]:
+        query = self.client.table("discovery_campaigns").select("*").order("created_at", desc=True)
+        if status:
+            query = query.eq("status", status)
+        result = query.execute()
+        return [DiscoveryCampaign(**row) for row in result.data]
+
+    # ── V2: Discovered Businesses ──────────────────────────────────────────
+
+    def create_discovered_business(self, biz: DiscoveredBusiness) -> DiscoveredBusiness:
+        data = biz.model_dump(exclude={"id", "created_at"})
+        result = self.client.table("discovered_businesses").insert(data).execute()
+        return DiscoveredBusiness(**result.data[0])
+
+    def list_discovered_businesses(
+        self,
+        campaign_id: str,
+        approved_only: bool = False,
+    ) -> list[DiscoveredBusiness]:
+        query = (
+            self.client.table("discovered_businesses")
+            .select("*")
+            .eq("campaign_id", campaign_id)
+            .order("created_at")
+        )
+        if approved_only:
+            query = query.eq("approved", True)
+        result = query.execute()
+        return [DiscoveredBusiness(**row) for row in result.data]
+
+    def update_discovered_business(self, biz_id: str, updates: dict) -> DiscoveredBusiness:
+        result = (
+            self.client.table("discovered_businesses")
+            .update(updates)
+            .eq("id", biz_id)
+            .execute()
+        )
+        return DiscoveredBusiness(**result.data[0])
+
+    def bulk_approve_businesses(self, biz_ids: list[str]) -> int:
+        """Approve a list of business IDs. Returns count updated."""
+        if not biz_ids:
+            return 0
+        result = (
+            self.client.table("discovered_businesses")
+            .update({"approved": True})
+            .in_("id", biz_ids)
+            .execute()
+        )
+        return len(result.data)
+
+    # ── V2: SMS Messages ───────────────────────────────────────────────────
+
+    def create_sms(self, sms: SMSMessage) -> SMSMessage:
+        data = sms.model_dump(exclude={"id", "created_at"})
+        if data.get("sent_at") and hasattr(data["sent_at"], "isoformat"):
+            data["sent_at"] = data["sent_at"].isoformat()
+        result = self.client.table("sms_messages").insert(data).execute()
+        return SMSMessage(**result.data[0])
+
+    def get_sms(self, sms_id: str) -> Optional[SMSMessage]:
+        result = self.client.table("sms_messages").select("*").eq("id", sms_id).execute()
+        if result.data:
+            return SMSMessage(**result.data[0])
+        return None
+
+    def update_sms_status(
+        self,
+        sms_id: str,
+        status: str,
+        twilio_sid: Optional[str] = None,
+        sent_at: Optional[datetime] = None,
+    ) -> SMSMessage:
+        updates: dict = {"status": status}
+        if twilio_sid:
+            updates["twilio_sid"] = twilio_sid
+        if sent_at:
+            updates["sent_at"] = sent_at.isoformat()
+        result = (
+            self.client.table("sms_messages")
+            .update(updates)
+            .eq("id", sms_id)
+            .execute()
+        )
+        return SMSMessage(**result.data[0])
+
+    def count_sms_sent_today(self) -> int:
+        today_start = datetime.utcnow().replace(hour=0, minute=0, second=0).isoformat()
+        result = (
+            self.client.table("sms_messages")
+            .select("id", count="exact")
+            .eq("status", "sent")
+            .gte("sent_at", today_start)
+            .execute()
+        )
+        return result.count or 0
+
+    def get_sms_for_contact(self, contact_id: str) -> list[SMSMessage]:
+        result = (
+            self.client.table("sms_messages")
+            .select("*")
+            .eq("contact_id", contact_id)
+            .order("created_at")
+            .execute()
+        )
+        return [SMSMessage(**row) for row in result.data]
+
     def get_daily_stats(self) -> DailyStats:
         today_start = datetime.utcnow().replace(hour=0, minute=0, second=0).isoformat()
         emails_sent_today = self.count_emails_sent_today()
@@ -311,3 +443,88 @@ class SupabaseDB:
             meetings_booked=meetings_today.count or 0,
             emails_remaining_today=max(0, 50 - emails_sent_today),
         )
+
+    # ── Research Enhancements ──────────────────────────────────────────────────
+
+    def save_tiered_research(self, lead_id: str, tiers_run: list, results: dict) -> dict:
+        """Persist tiered research results. Returns the inserted row."""
+        import json
+        data = {
+            "lead_id": lead_id,
+            "tiers_run": tiers_run,
+            "results": results,
+        }
+        result = self.client.table("tiered_research_results").insert(data).execute()
+        return result.data[0] if result.data else {}
+
+    def get_tiered_research(self, lead_id: str) -> Optional[dict]:
+        """Get the latest tiered research result for a lead."""
+        result = (
+            self.client.table("tiered_research_results")
+            .select("*")
+            .eq("lead_id", lead_id)
+            .order("executed_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+        return result.data[0] if result.data else None
+
+    def save_competitor_analysis(self, lead_id: str, analysis: dict) -> dict:
+        """Persist competitor analysis results."""
+        import json
+        data = {
+            "lead_id": lead_id,
+            "config": analysis.get("config", {}),
+            "competitors": analysis.get("competitors", []),
+            "capability_gaps": analysis.get("capability_gaps", []),
+            "outreach_points": analysis.get("outreach_talking_points", []),
+        }
+        result = self.client.table("competitor_analyses").insert(data).execute()
+        return result.data[0] if result.data else {}
+
+    def get_competitor_analysis(self, lead_id: str) -> Optional[dict]:
+        """Get the latest competitor analysis for a lead."""
+        result = (
+            self.client.table("competitor_analyses")
+            .select("*")
+            .eq("lead_id", lead_id)
+            .order("generated_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+        return result.data[0] if result.data else None
+
+    def save_pain_point_analysis(self, lead_id: str, analysis: dict) -> dict:
+        """Persist pain point analysis results."""
+        data = {
+            "lead_id": lead_id,
+            "reviews_analyzed": analysis.get("total_reviews_analyzed", 0),
+            "pain_points": analysis.get("pain_points", []),
+            "solution_mapping": analysis.get("solution_mapping", []),
+            "outreach_intelligence": analysis.get("outreach_intelligence", {}),
+        }
+        result = self.client.table("pain_point_analyses").insert(data).execute()
+        return result.data[0] if result.data else {}
+
+    def get_pain_point_analysis(self, lead_id: str) -> Optional[dict]:
+        """Get the latest pain point analysis for a lead."""
+        result = (
+            self.client.table("pain_point_analyses")
+            .select("*")
+            .eq("lead_id", lead_id)
+            .order("generated_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+        return result.data[0] if result.data else None
+
+    def save_signal_score(self, lead_id: str, score_result: dict) -> None:
+        """Update lead_scores.signal_score for a lead."""
+        try:
+            self.client.table("lead_scores").upsert(
+                {"lead_id": lead_id, "signal_score": score_result.get("priority_score", 0)},
+                on_conflict="lead_id",
+            ).execute()
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(f"save_signal_score failed: {e}")
