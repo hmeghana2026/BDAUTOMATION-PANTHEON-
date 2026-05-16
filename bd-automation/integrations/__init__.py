@@ -3,6 +3,7 @@ from .gemini_client import GeminiClient
 from .resend_client import ResendClient
 from .firecrawl_client import FirecrawlClient
 from .hunter_client import HunterClient
+from .yelp_client import YelpClient
 
 
 class LLMRouter:
@@ -33,4 +34,4 @@ class LLMRouter:
             return self.gemini.complete(prompt, system=system, max_tokens=max_tokens, temperature=temperature)
 
 
-__all__ = ["GroqClient", "GeminiClient", "ResendClient", "FirecrawlClient", "HunterClient", "LLMRouter"]
+__all__ = ["GroqClient", "GeminiClient", "ResendClient", "FirecrawlClient", "HunterClient", "LLMRouter", "YelpClient"]
