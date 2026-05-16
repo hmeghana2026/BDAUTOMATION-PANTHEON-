@@ -311,6 +311,23 @@ elif page == "Add Lead":
         contact_phone = col4.text_input("Phone", placeholder="+1 555 000 0000")
 
         auto_research = st.checkbox("Auto-research immediately (slower UI)", value=False)
+
+        # Research type options — only relevant when auto_research is checked
+        st.markdown('<p class="label" style="margin:16px 0 8px 0;">RESEARCH TYPE (IF AUTO-RESEARCH ENABLED)</p>',
+                    unsafe_allow_html=True)
+        rc1, rc2 = st.columns(2)
+        with rc1:
+            st.markdown('<span style="font-size:11px;color:var(--text-secondary,#888);">TIERS</span>', unsafe_allow_html=True)
+            res_t1 = st.checkbox("Tier 1 — Basic Info & Reviews", value=True, key="add_t1")
+            res_t2 = st.checkbox("Tier 2 — Digital Presence", value=True, key="add_t2")
+            res_t3 = st.checkbox("Tier 3 — Tech Stack", value=False, key="add_t3")
+            res_t4 = st.checkbox("Tier 4 — Decision Makers", value=False, key="add_t4")
+        with rc2:
+            st.markdown('<span style="font-size:11px;color:var(--text-secondary,#888);">ANALYSIS</span>', unsafe_allow_html=True)
+            res_signals = st.checkbox("Signal Scoring", value=True, key="add_signals")
+            res_competitors = st.checkbox("Competitor Gap Analysis", value=False, key="add_comp")
+            res_pain = st.checkbox("Pain Point Mining (Yelp)", value=False, key="add_pain")
+
         submitted = st.form_submit_button("ADD LEAD", type="primary")
 
     if submitted:
@@ -339,22 +356,23 @@ elif page == "Add Lead":
                     )
                 st.success(f"✓ Lead created: **{company_name}** (ID: `{lead.id[:8]}…`)")
                 if auto_research:
-                    with st.spinner("[RESEARCHING...]"):
-                        agents = get_agents()
-                        result = agents["research"].research_lead(lead)
-                        db().update_lead_status(lead.id, "researching")
-                        if result.owner_name and not contact_name:
-                            from database.models import Contact
-                            db().create_contact(
-                                Contact(
-                                    lead_id=lead.id,
-                                    name=result.owner_name,
-                                    role=result.owner_role,
-                                    email=result.email,
-                                    phone=result.phone,
-                                )
+                    tiers = [t for t, on in [(1, res_t1), (2, res_t2), (3, res_t3), (4, res_t4)] if on] or [1, 2]
+                    with st.spinner(f"[RESEARCHING TIERS {tiers}...]"):
+                        try:
+                            from agents.research_orchestrator import ResearchOrchestrator
+                            orch = ResearchOrchestrator(db=db())
+                            orch.run(
+                                lead=lead,
+                                tiers=tiers,
+                                run_signals=res_signals,
+                                run_competitor=res_competitors,
+                                run_pain_points=res_pain,
                             )
-                        st.success("✓ Research complete!")
+                            db().update_lead_status(lead.id, "researching")
+                            st.success("✓ Research complete! View results in Research Insights.")
+                        except Exception as e:
+                            st.error(f"Research failed: {e}")
+                            logger.exception("Add lead research error")
                 else:
                     st.info("→ Research will run automatically in the background via Celery.")
             except Exception as e:
