@@ -155,3 +155,43 @@ class SMSMessage(BaseModel):
     twilio_sid: Optional[str] = None
     reply_received: bool = False
     created_at: Optional[datetime] = None
+
+
+# ── Research Enhancement Models ────────────────────────────────────────────────
+
+class TieredResearchResult(BaseModel):
+    id: Optional[str] = None
+    lead_id: str
+    tiers_run: list
+    results: dict  # tier_1, tier_2, etc.
+    executed_at: Optional[datetime] = None
+
+
+class CompetitorAnalysisResult(BaseModel):
+    id: Optional[str] = None
+    lead_id: str
+    competitors: list
+    capability_gaps: list
+    outreach_talking_points: list
+    generated_at: Optional[datetime] = None
+
+
+class PainPointAnalysisResult(BaseModel):
+    id: Optional[str] = None
+    lead_id: str
+    total_reviews_analyzed: int
+    pain_points: list
+    solution_mapping: list
+    outreach_intelligence: dict
+    generated_at: Optional[datetime] = None
+
+
+class SignalScoringResult(BaseModel):
+    id: Optional[str] = None
+    lead_id: str
+    priority_score: int
+    qualification: str
+    signals_detected: list
+    total_possible_points: int
+    recommendation: str
+    scored_at: Optional[datetime] = None
